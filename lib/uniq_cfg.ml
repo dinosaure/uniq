@@ -1,4 +1,5 @@
 let src = Logs.Src.create "uniq.cfg"
+let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
@@ -225,7 +226,6 @@ let[@ocamlformat "disable"] parse str =
 let ( <?> ) fn0 fn1 = match fn0 () with Ok _ as v -> v | Error _ -> fn1 ()
 
 let from ?env compiler () =
-  let open Rresult in
   let ( let* ) = Result.bind in
   let where = Bos.Cmd.(v "which" % compiler) in
   let where = Bos.OS.Cmd.run_out ?env where in
@@ -237,10 +237,12 @@ let from ?env compiler () =
       let config = Bos.Cmd.(v compiler % "-config") in
       let config = Bos.OS.Cmd.run_out ?env config in
       begin match Bos.OS.Cmd.out_string ~trim:true config with
-      | Ok (cfg, (_, `Exited 0)) -> parse cfg >>| fun cfg -> (where, cfg)
-      | _ -> R.error_msgf "%s: impossible to get configuration" compiler
+      | Ok (cfg, (_, `Exited 0)) ->
+          let* cfg = parse cfg in
+          Ok (where, cfg)
+      | _ -> error_msgf "%s: impossible to get configuration" compiler
       end
-  | _ -> R.error_msgf "which: impossible to find %s" compiler
+  | _ -> error_msgf "which: impossible to find %s" compiler
 
 let v ?env () = from ?env "ocamlc" <?> from ?env "ocamlopt"
 

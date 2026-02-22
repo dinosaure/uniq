@@ -30,15 +30,13 @@ val ancestors :
 val to_artifacts :
   (Fpath.t * Assoc.t) list -> (Uniq_info.t list, [> `Msg of string ]) result
 
-val packages_of_artifacts :
+val find_providers :
      roots:Fpath.t list
   -> ?predicates:string list
-  -> Fpath.t list
-  -> (Path.t * Fpath.t) list
-(** [packages_of_artifacts ~roots ~predicates artifacts] retourne la liste
-    des paquets META [(meta_pkg_path, meta_dir)] dont les archives correspondent
-    à l'un des [artifacts] (.cmx/.cmxa/.cma/.cmo), en cherchant dans [roots].
-    [meta_dir] est le répertoire contenant le fichier META.
-    Les doublons sont éliminés. *)
+  -> Modname.t list
+  -> (Modname.t * Path.t list) list
+(** [find_providers ~roots modules] retourne pour chaque module de [modules] la
+    liste des paquets ocamlfind qui fournissent un fichier [.cmi] correspondant,
+    en scannant les fichiers META dans [roots]. *)
 
 val setup : Fpath.t list Cmdliner.Term.t

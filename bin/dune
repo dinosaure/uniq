@@ -16,6 +16,12 @@
  (libraries args uniq.mod uniq.cfg))
 
 (executable
+ (name resolve)
+ (public_name uniq.resolve)
+ (modules resolve)
+ (libraries args uniq.mod uniq.cfg uniq.meta))
+
+(executable
  (name meta)
  (public_name uniq.meta)
  (modules meta)

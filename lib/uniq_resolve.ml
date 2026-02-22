@@ -216,7 +216,10 @@ let sources_to_locations (`Sources { Src.recurse; location }) =
   in
   let elements =
     let sources = [ ".ml"; ".mli"; ".cmo"; ".cmi"; ".cma"; ".cmx"; "cmxa" ] in
-    let fn location = Ok (Fpath.mem_ext sources location) in
+    let fn location =
+      let base = Fpath.basename (Fpath.rem_ext location) in
+      Ok (Fpath.mem_ext sources location && not (String.contains base '.'))
+    in
     `Sat fn
   in
   OS.Path.fold ~dotfiles:true ~elements ~traverse List.cons [] [ location ]

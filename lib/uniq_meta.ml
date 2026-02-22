@@ -3,6 +3,7 @@ let src = Logs.Src.create "uniq.meta"
 module Log = (val Logs.src_log src : Logs.LOG)
 
 let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
+let ( let* ) = Result.bind
 
 type t =
   | Node of { name: string; value: string; contents: t list }
@@ -309,7 +310,7 @@ let dependencies_of (_path, descr) =
 
 exception Cycle
 
-let get_dep (_, path, descr) graph =
+let get_dependencies (_, path, descr) graph =
   let deps = dependencies_of (path, descr) in
   let fn name =
     match List.find_opt (fun (name', _, _) -> Path.equal name name') graph with
@@ -320,42 +321,41 @@ let get_dep (_, path, descr) graph =
 
 type graph = (Path.t * Fpath.t * Assoc.t) list
 
-let dfs (graph : graph) visited start_node =
+let dfs (graph : graph) visited start =
   let rec explore path visited node =
     if List.mem node path then raise Cycle
     else if List.mem node visited then visited
     else
       let new_path = node :: path in
-      let edges = get_dep node graph in
+      let edges = get_dependencies node graph in
       let visited = List.fold_left (explore new_path) visited edges in
       node :: visited
   in
-  explore [] visited start_node
+  explore [] visited start
+
+(* topological sort *)
 
 let sort graph =
   let fn visited node = dfs graph visited node in
   List.fold_left fn [] graph
 
-let ancestors ~roots ?(predicates = [ "native"; "byte" ]) meta_path =
+let ancestors ~roots ?(predicates = [ "native"; "byte" ]) mpath =
   let rec go acc visited = function
     | [] -> Ok acc
-    | meta_path :: todo when List.mem meta_path visited -> go acc visited todo
-    | meta_path :: todo -> (
-        Log.debug (fun m -> m "search %a" Path.pp meta_path);
-        match search ~roots ~predicates meta_path with
+    | mpath :: todo when List.mem mpath visited -> go acc visited todo
+    | mpath :: todo -> begin
+        match search ~roots ~predicates mpath with
         | Ok pkgs ->
             let requires = List.concat (List.map dependencies_of pkgs) in
-            Log.debug (fun m ->
-                m "search @[<hov>%a@]" Fmt.(Dump.list Path.pp) requires);
-            let pkgs =
-              List.map (fun (path, descr) -> (meta_path, path, descr)) pkgs
-            in
-            go (List.rev_append pkgs acc) (meta_path :: visited)
+            let fn (path, descr) = (mpath, path, descr) in
+            let pkgs = List.map fn pkgs in
+            go (List.rev_append pkgs acc) (mpath :: visited)
               (List.rev_append requires todo)
-        | Error _ as err -> err)
+        | Error _ as err -> err
+      end
   in
-  let ( >>| ) x f = Result.map f x in
-  go [] [] [ meta_path ] >>| fun lst -> sort lst |> List.rev
+  let* lst = go [] [] [ mpath ] in
+  Ok (sort lst |> List.rev)
 
 let to_artifacts pkgs =
   let ( let* ) = Result.bind in
@@ -384,7 +384,7 @@ let to_artifacts pkgs =
   let* paths = List.fold_left fn (Ok []) pkgs in
   Uniq_info.vs paths
 
-let collect_subpaths (meta : t list) : string list list =
+let subpaths (meta : t list) : string list list =
   let rec go prefix acc = function
     | [] -> acc
     | Node { name= "package"; value; contents; _ } :: rest ->
@@ -395,70 +395,128 @@ let collect_subpaths (meta : t list) : string list list =
   in
   [] :: go [] [] meta
 
-let packages_of_artifacts ~roots ?(predicates = [ "native"; "byte" ])
-    (artifacts : Fpath.t list) : (Path.t * Fpath.t) list =
-  let artifact_set =
-    List.fold_left (fun s p -> Fpath.Set.add p s) Fpath.Set.empty artifacts
+module MSet = Set.Make (Modname)
+
+let submodules path =
+  let cmi = Cmi_format.read_cmi path in
+  let fn = function
+    | Types.Sig_module (name, _, _, _, _) -> Some (Ident.name name)
+    | _ -> None
   in
+  match List.filter_map fn cmi.cmi_sign with
+  | value -> value
+  | exception _ -> []
+
+(* Given a META-described (sub)package at [meta_dir] with descriptor [descr],
+   return the directory where its .cmi files live. *)
+let package_directory dname descr =
+  match List.assoc_opt "directory" descr with
+  | Some [ d ] when d <> "" -> begin
+      match Fpath.of_string d with
+      | Ok rel -> Fpath.(dname // rel |> to_dir_path)
+      | Error _ -> Fpath.to_dir_path dname
+    end
+  | _ -> Fpath.to_dir_path dname
+
+(* Register [full_ks] as a provider of [modname] in [acc] when [modname] is
+   among the [targets] we are looking for. *)
+let register_if_target targets full modname acc =
+  if MSet.mem modname targets then
+    let fn = function
+      | None -> Some [ full ]
+      | Some pkgs -> Some (full :: pkgs)
+    in
+    Modname.Map.update modname fn acc
+  else acc
+
+(* Scan the .cmi files inside [dir_str] and register every top-level module
+   whose name belongs to [targets].  When [check_submodules] is true, also
+   open each .cmi to discover sub-modules (e.g. Cmdliner exports Cmd, Term). *)
+let scan_cmis ~and_submodules ~targets ~full ~dname acc =
+  if Sys.file_exists dname && Sys.is_directory dname then
+    let files = Sys.readdir dname in
+    let fn acc fname =
+      if not (Filename.check_suffix fname ".cmi") then acc
+      else
+        let base = Filename.chop_suffix fname ".cmi" in
+        let modname = Modname.v (String.capitalize_ascii base) in
+        let acc = register_if_target targets full modname acc in
+        if and_submodules then
+          let subs = submodules (Filename.concat dname fname) in
+          let fn acc name =
+            let m = Modname.v (String.capitalize_ascii name) in
+            register_if_target targets full m acc
+          in
+          List.fold_left fn acc subs
+        else acc
+    in
+    Array.fold_left fn acc files
+  else acc
+
+(* Walk every META file under [roots]; for each (sub)package, scan its .cmi
+   directory and populate the module→packages map. *)
+let walk_meta_files ~roots ~predicates ~and_submodules ~targets acc =
   let elements path =
     if Sys.is_directory (Fpath.to_string path) then Ok false
     else Ok (Fpath.basename path = "META")
   in
-  let fold_fn meta_path acc =
-    let meta_dir = Fpath.(parent meta_path |> rem_empty_seg) in
-    let _, rel = relativize ~roots meta_path in
+  let fn meta acc =
+    let _, rel = relativize ~roots meta in
     let segs = Fpath.(segs (rem_empty_seg (parent rel))) in
-    let base_ks = List.filter (fun s -> s <> "") segs in
-    match parser meta_path with
+    let base = List.filter (fun s -> s <> "") segs in
+    match parser meta with
     | Error _ -> acc
-    | Ok meta ->
-        let subpaths = collect_subpaths meta in
-        List.fold_left
-          (fun acc local_ks ->
-            let full_ks = base_ks @ local_ks in
-            let descr = compile ~predicates meta local_ks in
-            let sub_dir =
-              match List.assoc_opt "directory" descr with
-              | Some [ d ] when d <> "" -> (
-                  match Fpath.of_string d with
-                  | Ok rel -> Fpath.(meta_dir // rel |> to_dir_path)
-                  | Error _ -> Fpath.to_dir_path meta_dir)
-              | _ -> Fpath.to_dir_path meta_dir
-            in
-            let archives =
-              (List.assoc_opt "archive" descr |> Stdlib.Option.value ~default:[])
-              @ (List.assoc_opt "plugin" descr
-                |> Stdlib.Option.value ~default:[])
-            in
-            List.fold_left
-              (fun acc name ->
-                let candidate =
-                  match Fpath.of_string name with
-                  | Ok rel -> Fpath.(sub_dir // rel)
-                  | Error _ -> Fpath.add_seg sub_dir name
-                in
-                if Fpath.Set.mem candidate artifact_set then
-                  let meta_pkg_path =
-                    if full_ks = [] then [ Fpath.basename meta_dir ]
-                    else full_ks
-                  in
-                  (meta_pkg_path, meta_dir) :: acc
-                else acc)
-              acc archives)
-          acc subpaths
+    | Ok m ->
+        let fn acc local =
+          let full = base @ local in
+          let descr = compile ~predicates m local in
+          let dname =
+            Fpath.to_string
+              (package_directory Fpath.(parent meta |> rem_empty_seg) descr)
+          in
+          scan_cmis ~and_submodules ~targets ~full ~dname acc
+        in
+        List.fold_left fn acc (subpaths m)
   in
   let err _path _ = Ok () in
-  let raw =
-    Bos.OS.Path.fold ~err ~dotfiles:false ~elements:(`Sat elements)
-      ~traverse:`Any fold_fn [] roots
-    |> Result.value ~default:[]
-  in
+  Bos.OS.Path.fold ~err ~dotfiles:false ~elements:(`Sat elements) ~traverse:`Any
+    fn acc roots
+  |> Result.value ~default:acc
+
+(* Deduplicate packages per module name. *)
+let dedup result =
   let seen = Hashtbl.create 16 in
-  List.filter
-    (fun (path, _) ->
-      let key = String.concat "." path in
-      if Hashtbl.mem seen key then false else (Hashtbl.add seen key (); true))
-    (List.rev raw)
+  let fn modname pkgs acc =
+    let fn pkg =
+      let key = String.concat "." pkg in
+      match Hashtbl.find seen key with
+      | _ -> false
+      | exception Not_found -> Hashtbl.add seen key (); true
+    in
+    let uniques = List.filter fn (List.rev pkgs) in
+    Hashtbl.reset seen; (modname, uniques) :: acc
+  in
+  Modname.Map.fold fn result [] |> List.rev
+
+let find_providers ~roots ?(predicates = [ "native"; "byte" ]) modules =
+  let targets = List.fold_left (fun s m -> MSet.add m s) MSet.empty modules in
+  (* Pass 1: match by .cmi filename *)
+  let result =
+    walk_meta_files ~roots ~predicates ~and_submodules:false ~targets
+      Modname.Map.empty
+  in
+  (* Pass 2: for unresolved modules, also check sub-module exports *)
+  let resolved =
+    Modname.Map.fold (fun m _ s -> MSet.add m s) result MSet.empty
+  in
+  let remaining = MSet.diff targets resolved in
+  let result =
+    if MSet.is_empty remaining then result
+    else
+      walk_meta_files ~roots ~predicates ~and_submodules:true ~targets:remaining
+        result
+  in
+  dedup result
 
 open Cmdliner
 

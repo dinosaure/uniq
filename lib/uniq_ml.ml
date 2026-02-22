@@ -78,8 +78,10 @@ let analyze ?version:(release = Sys.ocaml_release) ?(stdlib = true) pkgs files =
 
 let run ?version ?stdlib lst =
   let to_namespaced name =
-    let segs = String.split_on_char '/' name in
-    let nms = List.map String.capitalize_ascii segs in
+    (* NOTE(dinosaure): we don't want to handle namespaces even if [codept] is
+       able to handle them. *)
+    let basename = Filename.basename name in
+    let nms = [ String.capitalize_ascii basename ] in
     (name, Namespaced.of_path nms)
   in
   let lst = List.map to_namespaced lst in

@@ -1,4 +1,6 @@
-open Rresult
+let ( let* ) = Result.bind
+let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
+
 open Bos
 
 type elements = [ `Only_objects | `Only_sources | `All ]
@@ -24,8 +26,9 @@ let all =
   let (`Sat objects) = objects in
   let (`Sat sources) = sources in
   let fn location =
-    objects location >>= fun a ->
-    sources location >>= fun b -> Ok (a || b)
+    let* a = objects location in
+    let* b = sources location in
+    Ok (a || b)
   in
   `Sat fn
 
@@ -43,7 +46,7 @@ let only location =
   `Sat fn
 
 let run cfg recurse root no_stdlib =
-  let ( let* ) x f = Result.bind x f in
+  let ( let* ) = Result.bind in
   let sources = Uniq_resolve.Src.sources ~recurse root in
   let srcs =
     match cfg with
@@ -90,7 +93,7 @@ let path =
     match Fpath.of_string str with
     | Ok v when Sys.file_exists str ->
         if Sys.is_directory str then Ok (Fpath.to_dir_path v) else Ok v
-    | Ok v -> R.error_msgf "%a does not exist" Fpath.pp v
+    | Ok v -> error_msgf "%a does not exist" Fpath.pp v
     | Error _ as err -> err
   in
   let existing_context = Arg.conv (parser, Fpath.pp) in
@@ -106,14 +109,16 @@ let no_stdlib =
 
 let term =
   let open Term in
-  ret
-    (const run
+  let term =
+    const run
     $ setup_fmt
     $ setup_logs
     $ Uniq_cfg.setup
     $ recurse
     $ path
-    $ no_stdlib)
+    $ no_stdlib
+  in
+  ret term
 
 let cmd =
   let doc = "Print information about an OCaml file." in

@@ -29,7 +29,6 @@
   compiler-libs
   fpath
   astring
-  rresult
   bos
   fmt.tty
   logs.fmt))
@@ -48,4 +47,4 @@
  (public_name uniq.meta)
  (modules uniq_meta uniq_meta_lexer)
  (wrapped false)
- (libraries cmdliner logs fmt fpath bos uniq.mod))
+ (libraries cmdliner compiler-libs logs fmt fpath bos uniq.mod))
