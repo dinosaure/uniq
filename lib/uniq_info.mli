@@ -70,6 +70,6 @@ val from_object :
      Fpath.t
   -> Misc.Magic_number.info
   -> in_channel
-  -> (t, [ `Msg of string ]) result
+  -> (t, [> `Msg of string ]) result
 
 val to_elt : elt list * elt list -> Deps.dep -> elt list * elt list

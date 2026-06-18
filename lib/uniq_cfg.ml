@@ -225,7 +225,7 @@ let[@ocamlformat "disable"] parse str =
 
 let ( <?> ) fn0 fn1 = match fn0 () with Ok _ as v -> v | Error _ -> fn1 ()
 
-let from ?env compiler () =
+let from ?env ?toolchain compiler () =
   let ( let* ) = Result.bind in
   let where = Bos.Cmd.(v "which" % compiler) in
   let where = Bos.OS.Cmd.run_out ?env where in
@@ -234,7 +234,12 @@ let from ?env compiler () =
   | str, (_, `Exited 0) ->
       let where = Fpath.v str in
       Log.debug (fun m -> m "Use %a as the OCaml compiler" Fpath.pp where);
-      let config = Bos.Cmd.(v compiler % "-config") in
+      let config =
+        match toolchain with
+        | None -> Bos.Cmd.(v compiler % "-config")
+        | Some t ->
+            Bos.Cmd.(v "ocamlfind" % "-toolchain" % t % compiler % "-config")
+      in
       let config = Bos.OS.Cmd.run_out ?env config in
       begin match Bos.OS.Cmd.out_string ~trim:true config with
       | Ok (cfg, (_, `Exited 0)) ->
@@ -379,16 +384,16 @@ let compiler =
   let open Arg in
   value & opt compiler `Native & info [ "compiler" ] ~doc ~docv:"COMPILER"
 
-let setup compiler =
+let setup toolchain compiler =
   let compiler =
     match compiler with `Native -> "ocamlopt" | `Bytecode -> "ocamlc"
   in
-  match from compiler () with
+  match from ?toolchain compiler () with
   | Ok (where, cfg) -> Some (where, cfg)
   | Error (`Msg msg) ->
       Log.warn (fun m ->
           m "Impossible to get the configuration of OCaml: %s" msg);
       None
 
-let setup = Term.(const setup $ compiler)
+let setup toolchain = Term.(const setup $ toolchain $ compiler)
 let from (where, _) = where

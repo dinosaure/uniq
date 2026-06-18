@@ -1,3 +1,6 @@
+(* NOTE(dinosaure): that's the core of [uniq] and how we use [codept] to infer
+   dependencies. On top of that, we should never interact with [codept] then. *)
+
 let src = Logs.Src.create "uniq.ml"
 
 module Log = (val Logs.src_log src : Logs.LOG)
@@ -95,10 +98,7 @@ let run_into ?version ?stdlib ~current lst =
   let effc : type c. c Effect.t -> ((c, 'r) continuation -> 'r) option =
     function
     | Read_file (kind, path, n) ->
-        Log.debug (fun m ->
-            m "exists: %b" (List.exists (String.equal path) lst));
         let path = Fpath.v path in
-        Log.debug (fun m -> m "read %a" Fpath.pp path);
         let path =
           if Fpath.is_abs path then path else Fpath.(current // path)
         in

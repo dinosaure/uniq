@@ -1,5 +1,5 @@
 (library
- (name ml)
+ (name uniq_ml)
  (public_name uniq.ml)
  (modules uniq_ml)
  (wrapped false)
@@ -12,27 +12,6 @@
  (wrapped false)
  (libraries uniq.ml bos fpath))
 
-(library
- (name uniq_top)
- (public_name uniq.top)
- (modules uniq_top)
- (wrapped false)
- (libraries compiler-libs.toplevel uniq.mod fmt.tty logs.fmt))
-
-(library
- (name uniq_cfg)
- (public_name uniq.cfg)
- (modules uniq_cfg)
- (wrapped false)
- (libraries cmdliner compiler-libs fpath astring bos fmt.tty logs.fmt))
-
-(library
- (name uniq_solve)
- (public_name uniq.solve)
- (modules uniq_solve)
- (wrapped false)
- (libraries fmt fpath opam-format opam-state opam-core))
-
 (ocamllex uniq_meta_lexer)
 
 (library
@@ -41,3 +20,32 @@
  (modules uniq_meta uniq_meta_lexer)
  (wrapped false)
  (libraries cmdliner compiler-libs logs fmt fpath bos uniq.mod))
+
+(library
+ (name uniq_opam)
+ (public_name uniq.papam)
+; NOTE(dinosaure): Netflix's name, [dune] does not like [uniq.opam]...
+ (modules uniq_opam)
+ (wrapped false)
+ (libraries fmt fpath opam-format opam-state opam-core))
+
+;(library
+; (name uniq_top)
+; (public_name uniq.top)
+; (modules uniq_top)
+; (wrapped false)
+; (libraries compiler-libs.toplevel uniq.mod fmt.tty logs.fmt))
+;
+ (library
+  (name uniq_cfg)
+  (public_name uniq.cfg)
+  (modules uniq_cfg)
+  (wrapped false)
+  (libraries cmdliner compiler-libs fpath astring bos fmt.tty logs.fmt))
+
+;(library
+; (name uniq_solve)
+; (public_name uniq.solve)
+; (modules uniq_solve)
+; (wrapped false)
+; (libraries fmt fpath opam-format opam-state opam-core))

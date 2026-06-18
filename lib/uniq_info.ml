@@ -4,8 +4,6 @@ let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 module Log = (val Logs.src_log src : Logs.LOG)
 module Digest = Uniq_digest
 
-[@@@warning "-32"]
-
 module Path : sig
   type t
 

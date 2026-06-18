@@ -7,14 +7,13 @@ let ( let* ) = Result.bind
 
 type t =
   | Node of { name: string; value: string; contents: t list }
-    (* [name] "[value]" ( [contents] ),
-       like [package "lib" ( ... )] *)
+      (** [name] "[value]" ( [contents] ), like [package "lib" ( ... )] *)
   | Set of { name: string; predicates: predicate list; value: string }
-    (* [name] [(...) as predicates] = [value],
-       like [archive(native) = "lib.cmxa"]*)
+      (** [name] [(...) as predicates] = [value], like
+          [archive(native) = "lib.cmxa"]*)
   | Add of { name: string; predicates: predicate list; value: string }
-(* [name] [(...) as predicates] = [value],
-   like [archive(native) += "lib.cmxa"]*)
+      (** [name] [(...) as predicates] = [value], like
+          [archive(native) += "lib.cmxa"]*)
 
 and predicate = Include of string | Exclude of string
 
@@ -73,6 +72,23 @@ module Path = struct
 
   let pp ppf pkg = Fmt.string ppf (String.concat "." pkg)
   let equal a b = try List.for_all2 String.equal a b with _ -> false
+  let compare = List.compare String.compare
+
+  let parent = function
+    | [] -> None
+    | segs -> Some (List.rev (List.tl (List.rev segs)))
+
+  module Set = Set.Make (struct
+    type nonrec t = t
+
+    let compare = compare
+  end)
+
+  module Map = Map.Make (struct
+    type nonrec t = t
+
+    let compare = compare
+  end)
 end
 
 let incl ~predicates ps =
@@ -302,11 +318,17 @@ let search ~roots ?(predicates = [ "native"; "byte" ]) meta_path =
     ~traverse:(`Sat traverse) fold Fpath.Map.empty roots
   >>| Fpath.Map.bindings
 
-let dependencies_of (_path, descr) =
+let requires descr =
+  (* [requires] values are whitespace-separated and frequently span several
+     lines in real META files (e.g. tls, x509); we must split on any blank, not
+     just spaces, otherwise tokens keep a trailing newline and resolution of
+     the dependency closure is silently truncated. *)
   Stdlib.Option.value ~default:[] (List.assoc_opt "requires" descr)
-  |> List.map (Astring.String.cuts ~empty:false ~sep:" ")
-  |> List.concat
+  |> List.concat_map
+       (Astring.String.fields ~empty:false ~is_sep:Astring.Char.Ascii.is_white)
   |> List.map Path.of_string_exn
+
+let dependencies_of (_path, descr) = requires descr
 
 exception Cycle
 
@@ -339,6 +361,10 @@ let sort graph =
   let fn visited node = dfs graph visited node in
   List.fold_left fn [] graph
 
+(* NOTE(dinosaure): [ancestors] exists if we would like to resolve dependencies
+   via [META] files. However, we prefer to resolve dependencies via OCaml
+   objects and their metadata. So, this function is a bit of useless but let's
+   keep it for what it might potentially solve. *)
 let ancestors ~roots ?(predicates = [ "native"; "byte" ]) mpath =
   let rec go acc visited = function
     | [] -> Ok acc
@@ -366,20 +392,33 @@ let to_artifacts pkgs =
         let directory = List.assoc_opt "directory" pkg in
         let* directory =
           match directory with
-          | Some [ dir ] -> Ok Fpath.(path / dir)
+          (* A META [directory] may be a relative {e path} ("foo/bar"), not a
+             single segment, so append it as a path rather than a segment. *)
+          | Some [ dir ] -> (
+              match Fpath.of_string dir with
+              | Ok rel -> Ok Fpath.(path // rel)
+              | Error _ -> Ok Fpath.(path / dir))
           | Some _ ->
               error_msgf "Multiple directories referenced by %a" Fpath.pp
                 Fpath.(path / "META")
           | None -> Ok path
         in
         let directory = Fpath.to_dir_path directory in
+        (* We only keep [.cma]/[.cmxa] archives: plugins ([.cmxs]) are not
+           readable as OCaml objects and carry no extra information for us. *)
         let archive = List.assoc_opt "archive" pkg in
         let archive = Stdlib.Option.value ~default:[] archive in
-        let plugin = List.assoc_opt "plugin" pkg in
-        let plugin = Stdlib.Option.value ~default:[] plugin in
+        let keep a =
+          match Filename.extension a with
+          | ".cma" | ".cmxa" -> true
+          | _ -> false
+        in
+        let archive = List.filter keep archive in
         let archive = List.map (Fpath.add_seg directory) archive in
-        let plugin = List.map (Fpath.add_seg directory) plugin in
-        Ok List.(rev_append archive (rev_append plugin acc))
+        let archive =
+          List.filter (fun p -> Sys.file_exists (Fpath.to_string p)) archive
+        in
+        Ok (List.rev_append archive acc)
   in
   let* paths = List.fold_left fn (Ok []) pkgs in
   Uniq_info.vs paths
@@ -417,6 +456,11 @@ let package_directory dname descr =
       | Error _ -> Fpath.to_dir_path dname
       end
   | _ -> Fpath.to_dir_path dname
+
+let has_archive descr =
+  match List.assoc_opt "archive" descr with
+  | Some archives -> List.exists (fun a -> a <> "") archives
+  | None -> false
 
 (* Register [full_ks] as a provider of [modname] in [acc] when [modname] is
    among the [targets] we are looking for. *)
@@ -457,7 +501,9 @@ let scan_cmis ~and_submodules ~targets ~full ~dname acc =
    directory and populate the module→packages map. *)
 let walk_meta_files ~roots ~predicates ~and_submodules ~targets acc =
   let elements path =
-    if Sys.is_directory (Fpath.to_string path) then Ok false
+    let str = Fpath.to_string path in
+    if not (Sys.file_exists str) then Ok false
+    else if Sys.is_directory str then Ok false
     else Ok (Fpath.basename path = "META")
   in
   let fn meta acc =
@@ -467,6 +513,10 @@ let walk_meta_files ~roots ~predicates ~and_submodules ~targets acc =
     match parser meta with
     | Error _ -> acc
     | Ok m ->
+        let metad =
+          let open Fpath in
+          parent meta |> rem_empty_seg |> to_dir_path |> to_string
+        in
         let fn acc local =
           let full = base @ local in
           let descr = compile ~predicates m local in
@@ -474,7 +524,10 @@ let walk_meta_files ~roots ~predicates ~and_submodules ~targets acc =
             Fpath.to_string
               (package_directory Fpath.(parent meta |> rem_empty_seg) descr)
           in
-          scan_cmis ~and_submodules ~targets ~full ~dname acc
+          let owns_dir = local = [] || dname <> metad in
+          if has_archive descr && owns_dir then
+            scan_cmis ~and_submodules ~targets ~full ~dname acc
+          else acc
         in
         List.fold_left fn acc (subpaths m)
   in
@@ -533,8 +586,13 @@ let directories =
   & opt_all (conv (parser, Fpath.pp)) []
   & info [ "I" ] ~doc ~docv:"DIRECTORY"
 
-let setup user's_directories =
-  let cmd = Bos.Cmd.(v "ocamlfind" % "printconf" % "path") in
+let setup toolchain user's_directories =
+  let cmd =
+    match toolchain with
+    | None -> Bos.Cmd.(v "ocamlfind" % "printconf" % "path")
+    | Some t ->
+        Bos.Cmd.(v "ocamlfind" % "-toolchain" % t % "printconf" % "path")
+  in
   let ( let* ) = Result.bind in
   let directories =
     let* exists = Bos.OS.Cmd.exists cmd in
@@ -545,7 +603,9 @@ let setup user's_directories =
         List.fold_left
           (fun acc path ->
             match Fpath.of_string path with
-            | Ok path -> path :: acc
+            | Ok fpath when Sys.file_exists path && Sys.is_directory path ->
+                fpath :: acc
+            | Ok _ -> acc
             | Error (`Msg _) ->
                 Logs.warn (fun m ->
                     m "ocamlfind returned an invalid path: %S" path);
@@ -558,4 +618,4 @@ let setup user's_directories =
   let directories = Result.value ~default:[] directories in
   List.rev_append directories user's_directories
 
-let setup = Term.(const setup $ directories)
+let setup toolchain = Term.(const setup $ toolchain $ directories)

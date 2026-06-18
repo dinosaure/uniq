@@ -1,4 +1,4 @@
-let src = Logs.Src.create "uniq.qualify"
+let src = Logs.Src.create "uniq.resolve"
 
 module Log = (val Logs.src_log src : Logs.LOG)
 module Digest = Uniq_digest
@@ -20,13 +20,9 @@ let by_crc gamma =
         | false, true -> Digest.Map.add crc v m
         | _ ->
             if Info.is_a_cmi u && Info.is_a_cmi v then Digest.Map.add crc u m
-            else begin
-              Logs.err (fun m ->
-                  m "Conflict on %a between %a and %a" Digest.pp crc Info.pp u
-                    Info.pp v);
+            else
               let t = conflict crc u v in
-              Digest.Map.add crc t m
-            end)
+              Digest.Map.add crc t m)
   in
   let fold m t =
     List.filter_map snd (Info.exports t) |> List.fold_left (add t) m
@@ -116,10 +112,9 @@ let qualify_objects gamma =
       | `Intf -> (fst gamma, fst extended)
       | `Impl -> (snd gamma, snd extended)
     in
-    match
-      ( Modname.Map.find_opt modname restricted
-      , Modname.Map.find_opt modname extended )
-    with
+    let mr = Modname.Map.find_opt modname restricted
+    and me = Modname.Map.find_opt modname extended in
+    match (mr, me) with
     | None, None -> (gamma, t)
     | Some v, _ ->
         let location = Info.location v in
@@ -152,18 +147,18 @@ let qualify_objects gamma =
   List.fold_left fold (restricted, []) gamma |> snd
 
 module Src = struct
-  type directory = { recurse: bool; location: Fpath.t }
+  type directory = { recurse: bool; location: Fpath.t; exclude: Fpath.t list }
   type t = [ `File of Fpath.t | `Sources of directory | `Objects of directory ]
 
   let pp ppf = function
     | `File v -> Fpath.pp ppf v
-    | `Sources { recurse= true; location } ->
+    | `Sources { recurse= true; location; _ } ->
         Fmt.pf ppf "Y(%a:*.{ml,mli,cmi,cmo,cmx,cma,cmxa})" Fpath.pp location
-    | `Sources { recurse= false; location } ->
+    | `Sources { recurse= false; location; _ } ->
         Fmt.pf ppf "(%a:*.{cmi,cmo,cmx,cma,cmxa})" Fpath.pp location
-    | `Objects { recurse= true; location } ->
+    | `Objects { recurse= true; location; _ } ->
         Fmt.pf ppf "Y(%a:*.{cmi,cmo,cmx,cma,cmxa})" Fpath.pp location
-    | `Objects { recurse= false; location } ->
+    | `Objects { recurse= false; location; _ } ->
         Fmt.pf ppf "(%a:*.{cmi,cmo,cmx,cma,cmxa})" Fpath.pp location
 
   let file location =
@@ -188,52 +183,61 @@ module Src = struct
             Fmt.invalid_arg "Invalid .cmi file: %a" Fpath.pp location
       else Fmt.invalid_arg "Invalid extension of %a" Fpath.pp location
 
-  let sources ?(recurse = true) location =
+  let sources ?(recurse = true) ?(exclude = []) location =
     if
       Fpath.is_dir_path location = false
       || Sys.file_exists (Fpath.to_string location) = false
       || Sys.is_directory (Fpath.to_string location) = false
     then Fmt.invalid_arg "%a is not a directory" Fpath.pp location
-    else `Sources { recurse; location }
+    else `Sources { recurse; location; exclude }
 
-  let objects ?(recurse = false) location =
+  let objects ?(recurse = false) ?(exclude = []) location =
     if
       Fpath.is_dir_path location = false
       || Sys.file_exists (Fpath.to_string location) = false
       || Sys.is_directory (Fpath.to_string location) = false
     then Fmt.invalid_arg "%a is not a directory" Fpath.pp location
-    else `Objects { recurse; location }
+    else `Objects { recurse; location; exclude }
 end
 
 open Bos
 
-let sources_to_locations (`Sources { Src.recurse; location }) =
-  let traverse =
-    if recurse then `Any
-    else
-      let fn location' = Ok (Fpath.equal location location') in
-      `Sat fn
+let is_excluded exclude path =
+  let fn x =
+    let x_as_dir = Fpath.to_dir_path x in
+    let path_as_dir = Fpath.to_dir_path path in
+    Fpath.equal x path
+    || Fpath.equal x_as_dir path_as_dir
+    || Fpath.is_prefix x_as_dir path_as_dir
   in
+  List.exists fn exclude
+
+let traverse_with ~recurse ~exclude location =
+  if recurse then `Sat (fun p -> Ok (not (is_excluded exclude p)))
+  else `Sat (fun p -> Ok (Fpath.equal location p))
+
+let sources_to_locations (`Sources { Src.recurse; location; exclude }) =
+  let traverse = traverse_with ~recurse ~exclude location in
   let elements =
     let sources = [ ".ml"; ".mli"; ".cmo"; ".cmi"; ".cma"; ".cmx"; "cmxa" ] in
     let fn location =
       let base = Fpath.basename (Fpath.rem_ext location) in
-      Ok (Fpath.mem_ext sources location && not (String.contains base '.'))
+      Ok
+        (Fpath.mem_ext sources location
+        && (not (String.contains base '.'))
+        && not (is_excluded exclude location))
     in
     `Sat fn
   in
   OS.Path.fold ~dotfiles:true ~elements ~traverse List.cons [] [ location ]
 
-let objects_to_locations (`Objects { Src.recurse; location }) =
-  let traverse =
-    if recurse then `Any
-    else
-      let fn location' = Ok (Fpath.equal location location') in
-      `Sat fn
-  in
+let objects_to_locations (`Objects { Src.recurse; location; exclude }) =
+  let traverse = traverse_with ~recurse ~exclude location in
   let elements =
     let sources = [ ".cmo"; ".cma"; ".cmx"; ".cmxa"; ".cmi" ] in
-    let fn location = Ok (Fpath.mem_ext sources location) in
+    let fn location =
+      Ok (Fpath.mem_ext sources location && not (is_excluded exclude location))
+    in
     `Sat fn
   in
   OS.Path.fold ~dotfiles:true ~elements ~traverse List.cons [] [ location ]
@@ -315,6 +319,72 @@ let is_stdlib t =
   || (String.length name > 11 && String.sub name 0 11 = "Camlinternal")
   || String.equal name "Std_exit"
 
+(* NOTE(dinosaure): [resolve_choose] and [resolve_conflict] are optimistic
+   implementations of what happens when our solver struggles to find a
+   solution. In reality, we’d probably fail, but let’s stay positive and
+   continue solving. *)
+
+(* The priority is:
+   1) [*.cmi]
+   2) a library ([*.cma] or [*.cmxa]
+   3) a native artifact
+   4) the first candidate
+ *)
+let resolve_choose modname vs =
+  let pick =
+    match List.find_opt Info.is_a_cmi vs with
+    | Some v -> v
+    | None -> (
+        match List.find_opt Info.is_a_library vs with
+        | Some v -> v
+        | None -> (
+            match List.find_opt Info.is_native vs with
+            | Some v -> v
+            | None -> List.hd vs))
+  in
+  Log.warn (fun m ->
+      m "Ambiguous module %a; picking %a among @[<hov>%a@]" Modname.pp modname
+        Info.pp pick
+        Fmt.(Dump.list Info.pp)
+        vs);
+  pick
+
+(* The choice between [u] and [v] is:
+   1) the library first
+   2) the [*.cmi]
+   3) or [u] (TODO)
+ *)
+let resolve_conflict crc u v =
+  let pick =
+    if Info.is_a_library u then u
+    else if Info.is_a_library v then v
+    else if Info.is_a_cmi u then u
+    else if Info.is_a_cmi v then v
+    else u
+  in
+  Log.warn (fun m ->
+      m "Conflict on %a between %a and %a; keeping %a" Digest.pp crc Info.pp u
+        Info.pp v Info.pp pick);
+  pick
+
+let with_resolver fn =
+  let open Effect.Deep in
+  let retc = Fun.id
+  and exnc = raise
+  and effc (type a) (eff : a Effect.t) =
+    match eff with
+    | Choose (modname, vs) ->
+        Some
+          (fun (k : (a, _) continuation) ->
+            continue k (resolve_choose modname vs))
+    | Conflict (crc, u, v) ->
+        Some
+          (fun (k : (a, _) continuation) ->
+            continue k (resolve_conflict crc u v))
+    | _ -> None
+  in
+  match_with fn () { retc; exnc; effc }
+
 let qualify ?(stdlib = true) files =
   let part location =
     OS.File.with_ic location @@ fun ic () ->
@@ -325,13 +395,19 @@ let qualify ?(stdlib = true) files =
         Ok (Either.Left v)
   in
   let part loc = Result.join (part loc ()) |> failwith_error_msg in
-  let objects, sources = List.partition_map part files in
-  let objects = qualify_objects objects in
-  let cmis, _ = List.partition Info.is_a_cmi objects in
-  let cmis = List.filter (Fun.negate is_stdlib) cmis in
-  let sources = from_sources ~stdlib ~cmis sources in
-  List.rev_append objects sources
+  let fn () =
+    let objects, sources = List.partition_map part files in
+    let objects = qualify_objects objects in
+    let cmis, _ = List.partition Info.is_a_cmi objects in
+    let cmis = List.filter (Fun.negate is_stdlib) cmis in
+    let sources = from_sources ~stdlib ~cmis sources in
+    List.rev_append objects sources
+  in
+  with_resolver fn
 
+(* NOTE(dinosaure): Finally, we can qualify objects (what they need) regardless
+   of whether it is a source file (managed by [codept]) or an artefact [*.cm*].
+ *)
 let qualify ?(stdlib = true) lst =
   let fn acc x =
     let* loc = to_locations x in
