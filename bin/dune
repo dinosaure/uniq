@@ -32,3 +32,25 @@
 ;  (public_name uniq.digest)
 ;  (modules digest)
 ;  (libraries cmdliner args uniq.mod))
+
+(executable
+ (name unique)
+ (modules unique)
+ (public_name uniq)
+ (libraries uniq.solver uniq.cli))
+
+(library
+ (name uniq_cli)
+ (modules uniq_cli)
+ (public_name uniq.cli)
+ (wrapped false)
+ (libraries
+  uniq.cfg
+  uniq.meta
+  re
+  bos
+  fpath
+  fmt.tty
+  fmt.cli
+  logs.fmt
+  logs.cli))

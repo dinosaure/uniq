@@ -19,7 +19,7 @@
  (public_name uniq.meta)
  (modules uniq_meta uniq_meta_lexer)
  (wrapped false)
- (libraries cmdliner compiler-libs logs fmt fpath bos uniq.mod))
+ (libraries compiler-libs logs fmt fpath bos uniq.mod))
 
 (library
  (name uniq_opam)

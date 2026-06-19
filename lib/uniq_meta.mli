@@ -40,8 +40,6 @@ val find_providers :
   -> Modname.t list
   -> (Modname.t * Path.t list) list
 
-val setup : string option Cmdliner.Term.t -> Fpath.t list Cmdliner.Term.t
-
 (**/*)
 
 val ancestors :

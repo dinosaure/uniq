@@ -1,7 +1,15 @@
-type t
+type cfg
+type src = private Fpath.t
+type t = src * cfg
 
 val v : ?env:Bos.OS.Env.t -> unit -> (t, [> `Msg of string ]) result
-val from : t -> Fpath.t
+
+val from :
+     ?env:Bos.OS.Env.t
+  -> ?toolchain:string
+  -> string
+  -> unit
+  -> (src * cfg, [> `Msg of string ]) result
 
 module Value : sig
   type _ t
@@ -14,9 +22,3 @@ module Value : sig
 end
 
 val get : ?native:bool option -> t -> key:string -> 'a Value.t -> 'a option
-
-val setup : string option Cmdliner.Term.t -> t option Cmdliner.Term.t
-(** [setup toolchain] construit le terme de configuration. [toolchain], s'il est
-    fourni, fait lire la configuration du compilateur croisé via
-    [ocamlfind -toolchain <NAME>] (ex. [solo5], dont la bibliothèque standard ne
-    fournit pas [Unix]). *)

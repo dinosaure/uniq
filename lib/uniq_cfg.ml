@@ -365,35 +365,3 @@ let get : type a. ?native:bool option -> t -> key:string -> a value -> a option
   | "cmt_magic_number", String -> Some cfg.cmt_magic_number
   | "linear_magic_number", String -> Some cfg.linear_magic_number
   | _ -> None
-
-open Cmdliner
-
-let compiler =
-  let doc = "The compiler chosen (bytecode or native)." in
-  let parser str =
-    match String.lowercase_ascii str with
-    | "bytecode" -> Ok `Bytecode
-    | "native" -> Ok `Native
-    | _ -> error_msgf "Invalid compiler %S (must be bytecode or native)" str
-  in
-  let pp ppf = function
-    | `Bytecode -> Fmt.string ppf "bytecode"
-    | `Native -> Fmt.string ppf "native"
-  in
-  let compiler = Arg.conv (parser, pp) in
-  let open Arg in
-  value & opt compiler `Native & info [ "compiler" ] ~doc ~docv:"COMPILER"
-
-let setup toolchain compiler =
-  let compiler =
-    match compiler with `Native -> "ocamlopt" | `Bytecode -> "ocamlc"
-  in
-  match from ?toolchain compiler () with
-  | Ok (where, cfg) -> Some (where, cfg)
-  | Error (`Msg msg) ->
-      Log.warn (fun m ->
-          m "Impossible to get the configuration of OCaml: %s" msg);
-      None
-
-let setup toolchain = Term.(const setup $ toolchain $ compiler)
-let from (where, _) = where
