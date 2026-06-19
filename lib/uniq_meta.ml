@@ -457,6 +457,10 @@ let package_directory dname descr =
       end
   | _ -> Fpath.to_dir_path dname
 
+(* A (sub)package actually ships compiled units only when it declares a
+   non-empty [archive]. Packages without one (virtual bases like [digestif],
+   deprecated redirects like [angstrom.async]) inherit the parent's directory
+   and would otherwise be spuriously credited with the parent's modules. *)
 let has_archive descr =
   match List.assoc_opt "archive" descr with
   | Some archives -> List.exists (fun a -> a <> "") archives

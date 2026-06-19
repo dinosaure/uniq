@@ -24,28 +24,28 @@
 (library
  (name uniq_opam)
  (public_name uniq.papam)
-; NOTE(dinosaure): Netflix's name, [dune] does not like [uniq.opam]...
+ ; NOTE(dinosaure): Netflix's name, [dune] does not like [uniq.opam]...
  (modules uniq_opam)
  (wrapped false)
  (libraries fmt fpath opam-format opam-state opam-core))
 
-;(library
-; (name uniq_top)
-; (public_name uniq.top)
-; (modules uniq_top)
-; (wrapped false)
-; (libraries compiler-libs.toplevel uniq.mod fmt.tty logs.fmt))
-;
- (library
-  (name uniq_cfg)
-  (public_name uniq.cfg)
-  (modules uniq_cfg)
-  (wrapped false)
-  (libraries cmdliner compiler-libs fpath astring bos fmt.tty logs.fmt))
+(library
+ (name uniq_cfg)
+ (public_name uniq.cfg)
+ (modules uniq_cfg)
+ (wrapped false)
+ (libraries compiler-libs cmdliner bos))
 
-;(library
-; (name uniq_solve)
-; (public_name uniq.solve)
-; (modules uniq_solve)
-; (wrapped false)
-; (libraries fmt fpath opam-format opam-state opam-core))
+(library
+ (name uniq_solver)
+ (public_name uniq.solver)
+ (modules uniq_solver)
+ (wrapped false)
+ (libraries logs fmt fpath uniq.cfg uniq.policy uniq.papam uniq.meta))
+
+(library
+ (name uniq_policy)
+ (public_name uniq.policy)
+ (modules uniq_policy)
+ (wrapped false)
+ (libraries uniq.meta bcfgt))
