@@ -22,8 +22,6 @@ let fail_on_ambiguity : disambiguate = fun m pkgs -> raise (Ambiguous (m, pkgs))
 type state = {
     roots: Fpath.t list
   ; policy: Uniq_policy.t
-  ; matches: string -> Uniq_meta.Path.t -> bool
-  ; crc_of: Uniq_meta.Path.t -> Modname.t -> Digest.t option
   ; disambiguate: disambiguate
   ; choices: Uniq_meta.Path.t Modname.Map.t
   ; committed: Uniq_meta.Path.Set.t
@@ -56,6 +54,7 @@ module Config = struct
     ; ignore: MSet.t
     ; forbid: MSet.t
     ; roots: Fpath.t list
+    ; policy: Uniq_policy.t
   }
 end
 
@@ -306,9 +305,54 @@ let solve ~cfg state ~resolve directs =
   in
   go state Uniq_meta.Path.Map.empty Uniq_meta.Path.Set.empty directs
 
-let solve ~cfg dirs =
+let verify ~cfg dirs pkgs =
   let ( let* ) = Result.bind in
-  let state = assert false in
+  let dirs = List.map absolute dirs in
+  let dirs = List.map Fpath.to_dir_path dirs in
+  let fn =
+    Uniq_resolve.Src.sources ~recurse:cfg.Config.recurse
+      ~exclude:cfg.Config.exclude
+  in
+  let srcs = List.map fn dirs in
+  let objs = List.map (fun { dirpath; _ } -> dirpath) pkgs in
+  let fn = Uniq_resolve.Src.objects ~recurse:false in
+  let objs = List.map fn objs in
+  let* infos = Uniq_resolve.qualify ~stdlib:cfg.Config.stdlib (srcs @ objs) in
+  let exports = Hashtbl.create 0x7ff in
+  let fn0 (mpath, _) =
+    match Uniq_info.Path.to_list mpath with
+    | [ m ] -> Hashtbl.replace exports m ()
+    | _ -> ()
+  in
+  let fn1 t = List.iter fn0 (Uniq_info.exports t) in
+  List.iter fn1 infos;
+  let fn acc t =
+    let intfs, impls = Uniq_info.missing t in
+    let intfs = List.to_seq intfs in
+    let impls = List.to_seq impls in
+    acc |> MSet.add_seq impls |> MSet.add_seq intfs
+  in
+  let ms = List.fold_left fn MSet.empty infos in
+  let ms = MSet.elements ms in
+  let fn modname =
+    (not (MSet.mem modname cfg.Config.ignore))
+    && not (Hashtbl.mem exports modname)
+  in
+  match List.filter fn ms with
+  | [] -> Ok ()
+  | _ -> error_msgf "Unqualified dependencies"
+
+let solve ~cfg ?(disambiguate = fail_on_ambiguity) dirs =
+  let ( let* ) = Result.bind in
+  let state =
+    {
+      roots= cfg.Config.roots
+    ; policy= cfg.Config.policy
+    ; disambiguate
+    ; choices= Modname.Map.empty
+    ; committed= Uniq_meta.Path.Set.empty
+    }
+  in
   let* state, directs = step ~cfg state dirs in
   let resolve state modules =
     let fn acc (m, crc) = Modname.Map.add m crc acc in
@@ -328,5 +372,5 @@ let solve ~cfg dirs =
     in
     (state, List.rev acc)
   in
-  let _state, _pkgs = solve ~cfg state ~resolve directs in
-  assert false
+  let _state, pkgs = solve ~cfg state ~resolve directs in
+  verify ~cfg dirs (List.map snd (Uniq_meta.Path.Map.to_list pkgs))
