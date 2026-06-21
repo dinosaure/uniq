@@ -285,7 +285,9 @@ let from_sources ~stdlib ~cmis = function
       List.map
         begin fun u ->
           let intfs, impls =
-            Deps.all u.Unit.more.Unit.dependencies
+            Unit.deps u
+            |> Deps.all
+            (* NOTE(dinosaure): same as [Deps.all u.Unit.more.Unit.dependencies] *)
             |> List.fold_left Info.to_elt ([], [])
           in
           let location = Fpath.v (Namespaced.filepath u.Unit.src.Pkg.file) in
@@ -333,17 +335,14 @@ let is_stdlib t =
    4) the first candidate
  *)
 let resolve_choose modname vs =
+  let ( let* ) x fn = match x with None -> fn () | Some v -> Some v in
   let pick =
-    match List.find_opt Info.is_a_cmi vs with
-    | Some v -> v
-    | None -> (
-        match List.find_opt Info.is_a_library vs with
-        | Some v -> v
-        | None -> (
-            match List.find_opt Info.is_native vs with
-            | Some v -> v
-            | None -> List.hd vs))
+    let* () = List.find_opt Info.is_a_cmi vs in
+    let* () = List.find_opt Info.is_a_library vs in
+    let* () = List.find_opt Info.is_native vs in
+    Some (List.hd vs)
   in
+  let pick = Stdlib.Option.get pick in
   Log.warn (fun m ->
       m "Ambiguous module %a; picking %a among @[<hov>%a@]" Modname.pp modname
         Info.pp pick

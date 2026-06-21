@@ -80,6 +80,7 @@ module RPath : sig
 
   val extend : modname:Modname.t -> t -> t
   val empty : t
+  val singleton : Modname.t -> t
   val to_path : t -> Path.t
   val pp : t Fmt.t
 
@@ -89,6 +90,7 @@ end = struct
 
   let extend ~modname v = modname :: v
   let empty = []
+  let singleton modname = [ modname ]
 
   let to_path = function
     | [] -> invalid_arg "RPath.to_path"
@@ -268,7 +270,7 @@ let to_elt (str, crc) =
   | Some crc -> Qualified (Modname.v str, crc)
   | None -> Named (Modname.v str)
 
-let collect_modules { Cmi_format.cmi_sign; _ } =
+let collect_modules_on_cmi { Cmi_format.cmi_sign; _ } =
   let rec on_signature_item ~prefix acc = function
     | Types.Sig_module (ident, _, { md_type; _ }, _, _) ->
         let modname = Modname.v (Ident.name ident) in
@@ -308,7 +310,7 @@ let info_of_cmi ~location ~version _ic =
       let format = Format (Cmi, cmi) in
       let name = Unitname.modulize (Fpath.to_string location) in
       let exports = elt_find (Unitname.modname name) intfs in
-      let modules = collect_modules cmi in
+      let modules = collect_modules_on_cmi cmi in
       let modules =
         Path.Set.map (Path.prepend (Unitname.modname name)) modules
       in
@@ -412,7 +414,13 @@ let info_of_cmxa ~location ~version ic =
 
 let is_intf location = Fpath.mem_ext [ ".mli" ] location
 
-let to_elt (intfs, impls) { Deps.path; pkg; _ } =
+let pp_dep ppf { Deps.path; edge; pkg; aliases } =
+  Fmt.pf ppf "%s%a(%a)%a"
+    (if edge = Deps.Edge.Normal then "" else "ε⋅")
+    Namespaced.pp path Pkg.pp pkg Namespaced.Set.pp aliases
+
+let to_elt (intfs, impls) ({ Deps.path; pkg; _ } as dep) =
+  Log.debug (fun m -> m "=> elt: @[<hov>%a@]" pp_dep dep);
   let name = Namespaced.module_name path in
   match pkg.source with
   | Pkg.Pkg v ->
@@ -425,6 +433,40 @@ let to_elt (intfs, impls) { Deps.path; pkg; _ } =
       else (intfs, Located (name, location) :: impls)
   | Pkg.Special _ -> (intfs, impls)
   | _ -> (Named name :: intfs, impls)
+
+let collect_modules_on_mli ~modname m2l =
+  let rec on_module_sig ~prefix acc = function
+    | M2l.Sig ts ->
+        let ts = List.map (fun { Loc.data; _ } -> data) ts in
+        List.fold_left (on_expression ~prefix) acc ts
+    | _ -> acc
+  and on_module_expr ~prefix acc = function
+    | M2l.Constraint (_me, ms) -> on_module_sig ~prefix acc ms
+    | _ -> acc
+  and on_expression ~prefix acc (expr : M2l.expression) =
+    match expr with
+    | M2l.Bind { name= Some name; expr } ->
+        let modname = Modname.v name in
+        let prefix = RPath.extend ~modname prefix in
+        let acc = RPath.Set.add prefix acc in
+        on_module_expr ~prefix acc expr
+    | M2l.Bind_rec ms ->
+        let fn acc = function
+          | { M2l.name= Some name; expr } ->
+              let modname = Modname.v name in
+              let prefix = RPath.extend ~modname prefix in
+              let acc = RPath.Set.add prefix acc in
+              on_module_expr ~prefix acc expr
+          | _ -> acc
+        in
+        List.fold_left fn acc ms
+    | _ -> acc
+  in
+  let ts = List.map (fun { Loc.data; _ } -> data) m2l in
+  let prefix = RPath.singleton modname in
+  let set = List.fold_left (on_expression ~prefix) RPath.Set.empty ts in
+  let fn elt acc = Path.Set.add (RPath.to_path elt) acc in
+  RPath.Set.fold fn set Path.Set.empty
 
 let from_source location =
   match Support.extension (Fpath.to_string location) with

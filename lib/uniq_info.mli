@@ -73,3 +73,4 @@ val from_object :
   -> (t, [> `Msg of string ]) result
 
 val to_elt : elt list * elt list -> Deps.dep -> elt list * elt list
+val collect_modules_on_mli : modname:Modname.t -> M2l.t -> Path.Set.t

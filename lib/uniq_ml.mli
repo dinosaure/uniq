@@ -1,3 +1,5 @@
+module Param : Stage.param
+
 type _ Effect.t +=
   | Read_file : Read.kind * string * Namespaced.t -> Unit.s Effect.t
 

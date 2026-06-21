@@ -2,23 +2,25 @@ let src = Logs.Src.create "uniq.solver"
 
 module Log = (val Logs.src_log src : Logs.LOG)
 module MSet = Set.Make (Modname)
+module Info = Uniq_info
+module Meta = Uniq_meta
 
 let msgf fmt = Fmt.kstr (fun msg -> `Msg msg) fmt
 let somef fmt = Fmt.kstr (fun str -> Some str) fmt
 let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 
-exception Ambiguous of Modname.t * Uniq_meta.Path.t list
+exception Ambiguous of Modname.t * Meta.Path.t list
 
 let () =
   Printexc.register_printer @@ function
   | Ambiguous (m, []) -> somef "No package provides %a" Modname.pp m
   | Ambiguous (m, pkgs) ->
       somef "Ambiguous module %a (@[<hov>%a@])" Modname.pp m
-        Fmt.(Dump.list Uniq_meta.Path.pp)
+        Fmt.(Dump.list Meta.Path.pp)
         pkgs
   | _ -> None
 
-type disambiguate = Modname.t -> Uniq_meta.Path.t list -> Uniq_meta.Path.t
+type disambiguate = Modname.t -> Meta.Path.t list -> Meta.Path.t
 
 let fail_on_ambiguity : disambiguate = fun m pkgs -> raise (Ambiguous (m, pkgs))
 
@@ -26,8 +28,8 @@ type state = {
     roots: Fpath.t list
   ; policy: Uniq_policy.t
   ; disambiguate: disambiguate
-  ; choices: Uniq_meta.Path.t Modname.Map.t
-  ; committed: Uniq_meta.Path.Set.t
+  ; choices: Meta.Path.t Modname.Map.t
+  ; committed: Meta.Path.Set.t
 }
 
 (* NOTE(dinosaure): the goal of [committed] is to keep some packages we already
@@ -37,9 +39,9 @@ type state = {
 let crc_of ~roots pkg modname =
   let ( let* ) = Result.bind in
   begin
-    let* descrs = Uniq_meta.search ~roots pkg in
-    let* infos = Uniq_meta.to_artifacts descrs in
-    let crc = List.find_map (fun v -> Uniq_info.crc_of v modname) infos in
+    let* descrs = Meta.search ~roots pkg in
+    let* infos = Meta.to_artifacts descrs in
+    let crc = List.find_map (fun v -> Info.crc_of v modname) infos in
     Stdlib.Option.to_result ~none:(msgf "") crc
   end
   |> Result.to_option
@@ -69,14 +71,14 @@ end
 
 let missing_modules infos =
   let fn acc t =
-    let intfs, impls = Uniq_info.missing t in
+    let intfs, impls = Info.missing t in
     let intfs = List.to_seq intfs and impls = List.to_seq impls in
     acc |> MSet.add_seq impls |> MSet.add_seq intfs
   in
   List.fold_left fn MSet.empty infos |> MSet.elements
 
 let commit state pkg =
-  let committed = Uniq_meta.Path.Set.add pkg state.committed in
+  let committed = Meta.Path.Set.add pkg state.committed in
   { state with committed }
 
 let remmember state modname pkg = function
@@ -93,7 +95,7 @@ let decide (state : state) modname crc pkgs =
         | [ pkg ] -> Some pkg
         | [] -> None
         | pkgs ->
-            let fn pkg = Uniq_meta.Path.Set.mem pkg state.committed in
+            let fn pkg = Meta.Path.Set.mem pkg state.committed in
             let* () = List.find_opt fn pkgs in
             let fn pkg = exports_crc state pkg modname crc in
             let* () = List.find_opt fn pkgs in
@@ -139,7 +141,7 @@ let step0 ~cfg (state : state) dirs =
         srcs);
   let* infos = Uniq_resolve.qualify ~stdlib:cfg.Config.stdlib srcs in
   Log.debug (fun m ->
-      m "qualified: @[<hov>%a@]" Fmt.(list ~sep:(any ";@ ") Uniq_info.pp) infos);
+      m "qualified: @[<hov>%a@]" Fmt.(list ~sep:(any ";@ ") Info.pp) infos);
   let missing = missing_modules infos in
   Log.debug (fun m ->
       m "missing: @[<hov>%a@]" Fmt.(list ~sep:(any ";@ ") Modname.pp) missing);
@@ -152,7 +154,7 @@ let step0 ~cfg (state : state) dirs =
           Fmt.(list ~sep:(any ",@ ") Modname.pp)
           ms
   in
-  let pkgs = Uniq_meta.find_providers ~roots:state.roots missing in
+  let pkgs = Meta.find_providers ~roots:state.roots missing in
   let fn (m, pkgs) = match pkgs with [] -> None | pkgs -> Some (m, pkgs) in
   let pkgs = List.filter_map fn pkgs in
   let fn acc (m, _pkgs) = MSet.add m acc in
@@ -203,7 +205,7 @@ let step0 ~cfg (state : state) dirs =
      when we have failed to resolve an ambiguity. *)
   let state, rem = soft state pkgs in
   let state = force state rem in
-  Ok (state, Uniq_meta.Path.Set.elements state.committed)
+  Ok (state, Meta.Path.Set.elements state.committed)
 
 let step0 ~cfg (state : state) dirs =
   match step0 ~cfg state dirs with
@@ -212,17 +214,17 @@ let step0 ~cfg (state : state) dirs =
       error_msgf "No package provides %a" Modname.pp m
   | exception Ambiguous (m, pkgs) ->
       error_msgf "Ambiguous module %a (@[<hov>%a@])" Modname.pp m
-        Fmt.(Dump.list Uniq_meta.Path.pp)
+        Fmt.(Dump.list Meta.Path.pp)
         pkgs
 
 let artifacts ~roots pkg =
-  match Uniq_meta.search ~roots pkg with
+  match Meta.search ~roots pkg with
   | Error _ | Ok [] -> None
   | Ok [ ((dirpath, _) as descr) ] ->
-      let objs = Uniq_meta.to_artifacts [ descr ] in
+      let objs = Meta.to_artifacts [ descr ] in
       let objs = Result.value ~default:[] objs in
       Some (dirpath, objs)
-  | Ok _ -> Fmt.failwith "Multiple solution for %a" Uniq_meta.Path.pp pkg
+  | Ok _ -> Fmt.failwith "Multiple solution for %a" Meta.Path.pp pkg
 
 let is_stdlib m =
   let m = Modname.to_string m in
@@ -235,11 +237,11 @@ let is_stdlib m =
 let self objs =
   let set = Hashtbl.create 0x7ff in
   let fn (mpath, _) =
-    match Uniq_info.Path.to_list mpath with
+    match Info.Path.to_list mpath with
     | [ m ] -> Hashtbl.replace set m ()
     | _ -> ()
   in
-  let fn obj = List.iter fn (Uniq_info.exports obj) in
+  let fn obj = List.iter fn (Info.exports obj) in
   List.iter fn objs; set
 
 let deps objs =
@@ -247,9 +249,9 @@ let deps objs =
   let fn0 obj =
     let crcs = Hashtbl.create 0x7ff in
     let fn (m, crc) = Hashtbl.replace crcs m crc in
-    List.iter fn (Uniq_info.intfs_imported obj);
-    List.iter fn (Uniq_info.impls_imported obj);
-    let intfs, impls = Uniq_info.missing obj in
+    List.iter fn (Info.intfs_imported obj);
+    List.iter fn (Info.impls_imported obj);
+    let intfs, impls = Info.missing obj in
     let fn modname =
       let crc = Hashtbl.find_opt crcs modname in
       (modname, Option.join crc)
@@ -263,8 +265,8 @@ let deps objs =
 
 type node = {
     dirpath: Fpath.t
-  ; objs: Uniq_info.t list
-  ; deps: (Uniq_meta.Path.t * [ `CRC | `Name ]) list
+  ; objs: Info.t list
+  ; deps: (Meta.Path.t * [ `CRC | `Name ]) list
 }
 
 let solve ~cfg state ~resolve directs =
@@ -279,15 +281,15 @@ let solve ~cfg state ~resolve directs =
       List.filter fn imports
   in
   let rec go state nodes visited frontier =
-    let fn pkg = not (Uniq_meta.Path.Set.mem pkg visited) in
+    let fn pkg = not (Meta.Path.Set.mem pkg visited) in
     match List.filter fn frontier with
     | [] -> (state, nodes)
     | frontier ->
         Log.debug (fun m ->
             m "frontier: @[<hov>%a@]"
-              Fmt.(list ~sep:(any ";@ ") Uniq_meta.Path.pp)
+              Fmt.(list ~sep:(any ";@ ") Meta.Path.pp)
               frontier);
-        let fn acc pkg = Uniq_meta.Path.Set.add pkg acc in
+        let fn acc pkg = Meta.Path.Set.add pkg acc in
         let visited = List.fold_left fn visited frontier in
         let fn pkg =
           match artifacts ~roots:cfg.Config.roots pkg with
@@ -307,7 +309,7 @@ let solve ~cfg state ~resolve directs =
           let links = Hashtbl.create 0x7ff in
           let fn (modname, crc) =
             match Hashtbl.find_opt pkgs' modname with
-            | Some pkg' when Uniq_meta.Path.equal pkg pkg' = false ->
+            | Some pkg' when Meta.Path.equal pkg pkg' = false ->
                 let lnk = if Stdlib.Option.is_some crc then `CRC else `Name in
                 let cur = Hashtbl.find_opt links pkg' in
                 let lnk = match cur with Some (_, `CRC) -> `CRC | _ -> lnk in
@@ -317,17 +319,20 @@ let solve ~cfg state ~resolve directs =
           List.iter fn deps;
           let deps =
             Hashtbl.fold (fun _ v acc -> v :: acc) links []
-            |> List.sort (fun (a, _) (b, _) -> Uniq_meta.Path.compare a b)
+            |> List.sort_uniq (fun (a, _) (b, _) -> Meta.Path.compare a b)
           in
           let elt = { dirpath; objs; deps } in
-          let nodes = Uniq_meta.Path.Map.add pkg elt nodes in
-          let directs' = List.rev_append (List.map fst deps) directs' in
+          let nodes = Meta.Path.Map.add pkg elt nodes in
+          let fn acc pkg = Meta.Path.Set.add pkg acc in
+          let directs' = List.fold_left fn directs' (List.map fst deps) in
           (nodes, directs')
         in
-        let nodes, directs' = List.fold_left fn (nodes, []) entries in
-        go state nodes visited directs'
+        let nodes, directs' =
+          List.fold_left fn (nodes, Meta.Path.Set.empty) entries
+        in
+        go state nodes visited (Meta.Path.Set.to_list directs')
   in
-  go state Uniq_meta.Path.Map.empty Uniq_meta.Path.Set.empty directs
+  go state Meta.Path.Map.empty Meta.Path.Set.empty directs
 
 (* TODO(dinosaure): we have a special case for the stdlib. The question is: why
    we don't pick [Stdlib__*] (or [stdlib.cmxa]) from what the [META] gives to
@@ -337,29 +342,29 @@ let solve ~cfg state ~resolve directs =
 let verify ~cfg g =
   let exports = Hashtbl.create 0x7ff in
   let fn2 (mpath, _) =
-    match Uniq_info.Path.to_list mpath with
+    match Info.Path.to_list mpath with
     | [ m ] -> Hashtbl.replace exports m ()
     | _ -> ()
   in
-  let fn1 info = List.iter fn2 (Uniq_info.exports info) in
+  let fn1 info = List.iter fn2 (Info.exports info) in
   let fn0 _ node = List.iter fn1 node.objs in
-  Uniq_meta.Path.Map.iter fn0 g;
+  Meta.Path.Map.iter fn0 g;
   let candidates = Hashtbl.create 0x7ff in
   let fn2 modname =
     if not (Hashtbl.mem exports modname) then
       Hashtbl.replace candidates modname ()
   in
   let fn1 info =
-    let intfs, impls = Uniq_info.missing info in
+    let intfs, impls = Info.missing info in
     List.iter fn2 (intfs @ impls)
   in
   let fn0 _ node = List.iter fn1 node.objs in
-  Uniq_meta.Path.Map.iter fn0 g;
+  Meta.Path.Map.iter fn0 g;
   let candidates = Hashtbl.fold (fun m () acc -> m :: acc) candidates [] in
   let fn acc (modname, pkgs) =
     match pkgs with [] -> acc | _ -> MSet.add modname acc
   in
-  let providers = Uniq_meta.find_providers ~roots:cfg.Config.roots candidates in
+  let providers = Meta.find_providers ~roots:cfg.Config.roots candidates in
   let provided = List.fold_left fn MSet.empty providers in
   let fn m = (not (is_stdlib m)) && not (MSet.mem m provided) in
   match List.filter fn candidates with
@@ -379,27 +384,34 @@ let solve ~cfg ?(disambiguate = fail_on_ambiguity) dirs =
     ; policy= cfg.Config.policy
     ; disambiguate
     ; choices= Modname.Map.empty
-    ; committed= Uniq_meta.Path.Set.empty
+    ; committed= Meta.Path.Set.empty
     }
   in
   let* state, directs = step0 ~cfg state dirs in
-  let resolve state modules =
-    let fn acc (m, crc) = Modname.Map.add m crc acc in
-    let crc_of = List.fold_left fn Modname.Map.empty modules in
-    let state, acc =
-      let modules = List.map fst modules in
-      let pkgs = Uniq_meta.find_providers ~roots:state.roots modules in
-      let fn (state, acc) (modname, pkgs) =
-        let crc = Option.join (Modname.Map.find_opt modname crc_of) in
-        match pkgs with
-        | [] -> (state, acc)
-        | pkgs ->
-            let state, pkg = decide_or_fail state modname crc pkgs in
-            (state, (modname, pkg) :: acc)
-      in
-      List.fold_left fn (state, []) pkgs
-    in
-    (state, List.rev acc)
+  (* NOTE(dinosaure): about the empty case for [modules], due to [dedup] into
+     our solver, it's possible that we already picked a pkg for a specific
+     modules and choose it instead of try to find a new provider. So we actually
+     can ask an empty list of [modules] to our resolver and we just need to
+     return an empty list of packages. *)
+  let resolve state = function
+    | [] -> (state, [])
+    | modules ->
+        let fn acc (m, crc) = Modname.Map.add m crc acc in
+        let crc_of = List.fold_left fn Modname.Map.empty modules in
+        let state, acc =
+          let modules = List.map fst modules in
+          let pkgs = Meta.find_providers ~roots:state.roots modules in
+          let fn (state, acc) (modname, pkgs) =
+            let crc = Option.join (Modname.Map.find_opt modname crc_of) in
+            match pkgs with
+            | [] -> (state, acc)
+            | pkgs ->
+                let state, pkg = decide_or_fail state modname crc pkgs in
+                (state, (modname, pkg) :: acc)
+          in
+          List.fold_left fn (state, []) pkgs
+        in
+        (state, List.rev acc)
   in
   let _state, g = solve ~cfg state ~resolve directs in
   verify ~cfg g

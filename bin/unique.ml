@@ -17,7 +17,10 @@ let prompt modname pkgs =
       end
 
 let run_solver _quiet _cfg0 cfg1 dirs =
-  Uniq_solver.solve ~cfg:cfg1 ~disambiguate:prompt dirs
+  let ( let* ) = Result.bind in
+  let* () = Uniq_solver.solve ~cfg:cfg1 ~disambiguate:prompt dirs in
+  Fmt.pr "Project verified!\n%!";
+  Ok ()
 
 open Cmdliner
 open Uniq_cli

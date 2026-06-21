@@ -466,8 +466,8 @@ let has_archive descr =
   | Some archives -> List.exists (fun a -> a <> "") archives
   | None -> false
 
-(* Register [full_ks] as a provider of [modname] in [acc] when [modname] is
-   among the [targets] we are looking for. *)
+(* Register [full] (a package) as a provider of [modname] in [acc] when
+   [modname] is among the [targets] we are looking for. *)
 let register_if_target targets full modname acc =
   if MSet.mem modname targets then
     let fn = function
@@ -477,9 +477,10 @@ let register_if_target targets full modname acc =
     Modname.Map.update modname fn acc
   else acc
 
-(* Scan the .cmi files inside [dir_str] and register every top-level module
-   whose name belongs to [targets].  When [check_submodules] is true, also
-   open each .cmi to discover sub-modules (e.g. Cmdliner exports Cmd, Term). *)
+(* Scan the .cmi files inside [dname] and register every top-level module
+   whose name belongs to [targets].  When [and_submodules] is true, also
+   open each .cmi to discover sub-modules (e.g. [Cmdliner] exports [Cmd],
+   [Term]). *)
 
 (* TODO(dinosaure): we have a bug with [x509] and a third (sub)module:
    [X509.Distinguished_name.Relative_distinguished_name]. When we do a
@@ -490,8 +491,7 @@ let scan_cmis ~and_submodules ~targets ~full ~dname acc =
   if Sys.file_exists dname && Sys.is_directory dname then
     let files = Sys.readdir dname in
     let fn acc fname =
-      if not (Filename.check_suffix fname ".cmi") then acc
-      else
+      if Filename.check_suffix fname ".cmi" then
         let base = Filename.chop_suffix fname ".cmi" in
         let modname = Modname.v (String.capitalize_ascii base) in
         let acc = register_if_target targets full modname acc in
@@ -503,13 +503,50 @@ let scan_cmis ~and_submodules ~targets ~full ~dname acc =
           in
           List.fold_left fn acc subs
         else acc
+      else acc
     in
     Array.fold_left fn acc files
   else acc
 
-(* Walk every META file under [roots]; for each (sub)package, scan its .cmi
-   directory and populate the module→packages map. *)
-let walk_meta_files ~roots ~predicates ~and_submodules ~targets acc =
+let with_a_cmi filepath =
+  let filepath = Fpath.set_ext "cmi" filepath in
+  let filepath = Fpath.to_string filepath in
+  Sys.file_exists filepath && Sys.is_regular_file filepath
+
+let scan_mlis ~and_submodules:_ ~targets ~full ~dname acc =
+  if Sys.file_exists dname && Sys.is_directory dname then
+    let files = Sys.readdir dname in
+    let fn acc fname =
+      let filepath = Fpath.(v dname / fname) in
+      if Filename.check_suffix fname ".mli" && with_a_cmi filepath then
+        try
+          let filepath = Fpath.(v dname / fname) in
+          let kind = { Read.format= Read.Src; kind= M2l.Signature } in
+          let namespace = Namespaced.make (Filename.chop_suffix fname ".mli") in
+          let v =
+            Unit.read_file Uniq_ml.Param.fault_handler kind
+              (Fpath.to_string filepath) namespace
+          in
+          let modname = Namespaced.module_name namespace in
+          let modules = Uniq_info.collect_modules_on_mli ~modname v.Unit.code in
+          let fn path acc =
+            match Uniq_info.Path.to_list path with
+            | _ :: _ :: rem ->
+                let fn acc m = register_if_target targets full m acc in
+                List.fold_left fn acc rem
+            | _ -> acc
+          in
+          Uniq_info.Path.Set.fold fn modules acc
+        with _exn -> acc
+      else acc
+    in
+    Array.fold_left fn acc files
+  else acc
+
+(* Walk every META file under [roots]; for each (sub)package, scan its [*.cmi]
+   directory and populate the module -> packages map. *)
+let walk_meta_files ~roots ~predicates ~and_submodules ?(intf = `Cmi) ~targets
+    acc =
   let elements path =
     let str = Fpath.to_string path in
     if not (Sys.file_exists str) then Ok false
@@ -536,7 +573,9 @@ let walk_meta_files ~roots ~predicates ~and_submodules ~targets acc =
           in
           let owns_dir = local = [] || dname <> metad in
           if has_archive descr && owns_dir then
-            scan_cmis ~and_submodules ~targets ~full ~dname acc
+            match intf with
+            | `Cmi -> scan_cmis ~and_submodules ~targets ~full ~dname acc
+            | `Mli -> scan_mlis ~and_submodules ~targets ~full ~dname acc
           else acc
         in
         List.fold_left fn acc (subpaths m)
@@ -578,5 +617,16 @@ let find_providers ~roots ?(predicates = [ "native"; "byte" ]) modules =
     else
       walk_meta_files ~roots ~predicates ~and_submodules:true ~targets:remaining
         result
+  in
+  (* Pass 3: for unresolved modules, also check sub-*-module exports via *.mli *)
+  let resolved =
+    Modname.Map.fold (fun m _ s -> MSet.add m s) result MSet.empty
+  in
+  let remaining = MSet.diff remaining resolved in
+  let result =
+    if MSet.is_empty remaining then result
+    else
+      walk_meta_files ~roots ~predicates ~and_submodules:true ~intf:`Mli
+        ~targets:remaining result
   in
   dedup result
