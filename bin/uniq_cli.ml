@@ -1,7 +1,27 @@
 let src = Logs.Src.create "uniq.cli"
+let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 
 module Log = (val Logs.src_log src : Logs.LOG)
 open Cmdliner
+
+let existing_filepath =
+  let parser str =
+    match Fpath.of_string str with
+    | Ok v when Sys.file_exists str && Sys.is_regular_file str -> Ok v
+    | Ok v -> error_msgf "%a does not exist" Fpath.pp v
+    | Error _ as err -> err
+  in
+  Arg.conv (parser, Fpath.pp)
+
+let existing_dirpath =
+  let parser str =
+    match Fpath.of_string str with
+    | Ok v when Sys.file_exists str && Sys.is_directory str ->
+        Ok (Fpath.to_dir_path v)
+    | Ok v -> error_msgf "%a does not exist" Fpath.pp v
+    | Error _ as err -> err
+  in
+  Arg.conv (parser, Fpath.pp)
 
 let s_output = "OUTPUT OPTIONS"
 let s_logs = "LOGS OPTIONS"
@@ -80,17 +100,11 @@ let setup_logs =
 
 let s_ocamlfind = "OCAMLFIND OPTIONS"
 
-let directories =
+let ocamlfind's_directories =
   let doc = "The source directory containing the META files." in
-  let parser str =
-    match Fpath.of_string str with
-    | Ok _ as v when Sys.file_exists str && Sys.is_directory str -> v
-    | Ok v -> error_msgf "%a is not a directory or does not exist" Fpath.pp v
-    | Error _ as err -> err
-  in
   let open Arg in
   value
-  & opt_all (conv (parser, Fpath.pp)) []
+  & opt_all existing_dirpath []
   & info [ "I" ] ~doc ~docs:s_ocamlfind ~docv:"DIRECTORY"
 
 let setup_ocamlfind toolchain user's_directories =
@@ -136,8 +150,8 @@ let toolchain =
   & opt (some string) None
   & info [ "toolchain" ] ~doc ~docs:s_ocamlfind ~docv:"NAME"
 
-let setup_ocamlfind toolchain =
-  Term.(const setup_ocamlfind $ toolchain $ directories)
+let setup_ocamlfind =
+  Term.(const setup_ocamlfind $ toolchain $ ocamlfind's_directories)
 
 let s_ocaml = "OCAML OPTIONS"
 
@@ -171,3 +185,45 @@ let setup_ocaml toolchain compiler =
       None
 
 let setup_ocaml = Term.(const setup_ocaml $ toolchain $ compiler)
+
+let modname =
+  let parser str =
+    match Modname.of_string str with
+    | Ok _ as v -> v
+    | Error (`Msg msg) -> Error (`Msg msg)
+    (* NOTE(dinosaure): open it! *)
+  in
+  Arg.conv ~docv:"MODULE" (parser, Modname.pp)
+
+let path =
+  let parser str =
+    match Fpath.of_string str with
+    | Ok v when Sys.file_exists str ->
+        let v = if Sys.is_directory str then Fpath.to_dir_path v else v in
+        Ok v
+    | Ok v -> error_msgf "%a does not exist" Fpath.pp v
+    | Error _ as err -> err
+  in
+  Arg.conv (parser, Fpath.pp)
+
+let setup_policy = function
+  | None -> Uniq_policy.empty
+  | Some filepath ->
+      let policy = Uniq_policy.load filepath in
+      let fn _ =
+        Log.warn (fun m ->
+            m "Invalid configuration file (you can validate it with %a): %a"
+              Fmt.(styled `Bold string)
+              "bcfg validate" Fpath.pp filepath)
+      in
+      Result.iter_error fn policy;
+      Result.value ~default:Uniq_policy.empty policy
+
+let configuration =
+  let doc = "A $(b,bcfg) policy file to disambiguate package choices." in
+  let open Arg in
+  value
+  & opt (some existing_filepath) None
+  & info [ "c"; "config" ] ~doc ~docv:"FILE"
+
+let setup_policy = Term.(const setup_policy $ configuration)

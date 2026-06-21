@@ -51,7 +51,7 @@ let pp_kind ppf = function
 let read (k, filename, n) =
   let eff = Read_file (k, filename, n) in
   Log.debug (fun m ->
-      m "Read file %S (from %a, type %a)" filename pp_format k.format pp_kind
+      m "read file %S (from %a, type %a)" filename pp_format k.format pp_kind
         k.kind);
   Effect.perform eff
 
@@ -74,8 +74,8 @@ let analyze ?version:(release = Sys.ocaml_release) ?(stdlib = true) pkgs files =
       Module.Dict.empty
   in
   Log.debug (fun m ->
-      m "Start to solve dependencies of @[<hov>%a@]"
-        Fmt.(Dump.list Namespaced.pp)
+      m "start to solve dependencies of @[<hov>%a@]"
+        Fmt.(list ~sep:(any ";@ ") Namespaced.pp)
         namespace);
   Solver.solve env units
 

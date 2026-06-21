@@ -31,8 +31,8 @@ let by_crc gamma =
 
 let choose modname vs =
   Log.debug (fun m ->
-      m "Choose %a from: @[<hov>%a@]" Modname.pp modname
-        Fmt.(Dump.list Info.pp)
+      m "choose %a from: @[<hov>%a@]" Modname.pp modname
+        Fmt.(list ~sep:(any ";@.") Info.pp)
         vs);
   match List.filter Info.is_a_library vs with
   | [] -> Effect.perform (Choose (modname, vs))
@@ -58,7 +58,9 @@ let qualify_by_crc gamma =
   let by_crc = by_crc gamma in
   let qualify k (by_modname, t) (modname, crc) =
     Log.debug (fun m ->
-        m "Search %a for %a" Fmt.(Dump.option Digest.pp) crc Info.pp t);
+        m "search %a for %a"
+          Fmt.(option ~none:(any "<none>") Digest.pp)
+          crc Info.pp t);
     match Stdlib.Option.bind crc (flip $ Digest.Map.find_opt $ by_crc) with
     | None -> (by_modname, t)
     | Some v when exports modname v ->
@@ -106,7 +108,7 @@ let qualify_objects gamma =
   let by_modname, gamma = qualify_by_crc gamma in
   let restricted, extended = complete_by_modname by_modname gamma in
   let qualify k (gamma, t) (modname, _crc) =
-    Log.debug (fun m -> m "Search %a for %a" Modname.pp modname Info.pp t);
+    Log.debug (fun m -> m "search %a for %a" Modname.pp modname Info.pp t);
     let restricted, extended =
       match k with
       | `Intf -> (fst gamma, fst extended)

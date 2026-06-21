@@ -233,7 +233,7 @@ let from ?env ?toolchain compiler () =
   match where with
   | str, (_, `Exited 0) ->
       let where = Fpath.v str in
-      Log.debug (fun m -> m "Use %a as the OCaml compiler" Fpath.pp where);
+      Log.debug (fun m -> m "use %a as the OCaml compiler" Fpath.pp where);
       let config =
         match toolchain with
         | None -> Bos.Cmd.(v compiler % "-config")

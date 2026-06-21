@@ -37,7 +37,7 @@
  (name unique)
  (modules unique)
  (public_name uniq)
- (libraries uniq.solver uniq.cli))
+ (libraries compiler-libs.common uniq.solver uniq.cli))
 
 (library
  (name uniq_cli)
@@ -45,8 +45,10 @@
  (public_name uniq.cli)
  (wrapped false)
  (libraries
+  compiler-libs.common
   uniq.cfg
   uniq.meta
+  uniq.policy
   re
   bos
   fpath

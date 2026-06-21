@@ -1,5 +1,15 @@
 module Config : sig
   type t
+
+  val cfg :
+       ?stdlib:bool
+    -> ?recurse:bool
+    -> ?exclude:Fpath.t list
+    -> ?ignore:Modname.t list
+    -> ?forbid:Modname.t list
+    -> ?policy:Uniq_policy.t
+    -> Fpath.t list
+    -> t
 end
 
 type disambiguate = Modname.t -> Uniq_meta.Path.t list -> Uniq_meta.Path.t

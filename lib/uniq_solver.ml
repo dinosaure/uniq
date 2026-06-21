@@ -1,3 +1,6 @@
+let src = Logs.Src.create "uniq.solver"
+
+module Log = (val Logs.src_log src : Logs.LOG)
 module MSet = Set.Make (Modname)
 
 let msgf fmt = Fmt.kstr (fun msg -> `Msg msg) fmt
@@ -56,6 +59,12 @@ module Config = struct
     ; roots: Fpath.t list
     ; policy: Uniq_policy.t
   }
+
+  let cfg ?(stdlib = true) ?(recurse = false) ?(exclude = []) ?(ignore = [])
+      ?(forbid = []) ?(policy = Uniq_policy.empty) roots =
+    let ignore = MSet.of_list ignore in
+    let forbid = MSet.of_list forbid in
+    { stdlib; recurse; exclude; ignore; forbid; policy; roots }
 end
 
 let missing_modules infos =
@@ -115,7 +124,7 @@ let absolute =
     let path = if Fpath.is_rel path then Fpath.(cwd // path) else path in
     Fpath.normalize path
 
-let step ~cfg (state : state) dirs =
+let step0 ~cfg (state : state) dirs =
   let ( let* ) = Result.bind in
   let fn =
     Uniq_resolve.Src.sources ~recurse:cfg.Config.recurse
@@ -124,8 +133,16 @@ let step ~cfg (state : state) dirs =
   let dirs = List.map absolute dirs in
   let dirs = List.map Fpath.to_dir_path dirs in
   let srcs = List.map fn dirs in
+  Log.debug (fun m ->
+      m "qualify (with stdlib:%b): @[<hov>%a@]" cfg.Config.stdlib
+        Fmt.(list ~sep:(any ";@ ") Uniq_resolve.Src.pp)
+        srcs);
   let* infos = Uniq_resolve.qualify ~stdlib:cfg.Config.stdlib srcs in
+  Log.debug (fun m ->
+      m "qualified: @[<hov>%a@]" Fmt.(list ~sep:(any ";@ ") Uniq_info.pp) infos);
   let missing = missing_modules infos in
+  Log.debug (fun m ->
+      m "missing: @[<hov>%a@]" Fmt.(list ~sep:(any ";@ ") Modname.pp) missing);
   let* () =
     let fn m = MSet.mem m cfg.forbid in
     match List.filter fn missing with
@@ -188,8 +205,8 @@ let step ~cfg (state : state) dirs =
   let state = force state rem in
   Ok (state, Uniq_meta.Path.Set.elements state.committed)
 
-let step ~cfg (state : state) dirs =
-  match step ~cfg state dirs with
+let step0 ~cfg (state : state) dirs =
+  match step0 ~cfg state dirs with
   | (Ok _ | Error _) as value -> value
   | exception Ambiguous (m, []) ->
       error_msgf "No package provides %a" Modname.pp m
@@ -209,6 +226,9 @@ let artifacts ~roots pkg =
 
 let is_stdlib m =
   let m = Modname.to_string m in
+  (* TODO(dinosaure): we probably can "flatten" [Bundle.stdlib] from [codept]
+     to discriminate strictly any modules from the standard library. Actually,
+     [codept] defines [Bundle.stdlib] as a [Namespace]. *)
   let prefixes = [ "Stdlib"; "Stdlib__"; "Camlinternal"; "Std_exit" ] in
   List.exists (fun prefix -> String.starts_with ~prefix m) prefixes
 
@@ -263,6 +283,10 @@ let solve ~cfg state ~resolve directs =
     match List.filter fn frontier with
     | [] -> (state, nodes)
     | frontier ->
+        Log.debug (fun m ->
+            m "frontier: @[<hov>%a@]"
+              Fmt.(list ~sep:(any ";@ ") Uniq_meta.Path.pp)
+              frontier);
         let fn acc pkg = Uniq_meta.Path.Set.add pkg acc in
         let visited = List.fold_left fn visited frontier in
         let fn pkg =
@@ -305,42 +329,47 @@ let solve ~cfg state ~resolve directs =
   in
   go state Uniq_meta.Path.Map.empty Uniq_meta.Path.Set.empty directs
 
-let verify ~cfg dirs pkgs =
-  let ( let* ) = Result.bind in
-  let dirs = List.map absolute dirs in
-  let dirs = List.map Fpath.to_dir_path dirs in
-  let fn =
-    Uniq_resolve.Src.sources ~recurse:cfg.Config.recurse
-      ~exclude:cfg.Config.exclude
-  in
-  let srcs = List.map fn dirs in
-  let objs = List.map (fun { dirpath; _ } -> dirpath) pkgs in
-  let fn = Uniq_resolve.Src.objects ~recurse:false in
-  let objs = List.map fn objs in
-  let* infos = Uniq_resolve.qualify ~stdlib:cfg.Config.stdlib (srcs @ objs) in
+(* TODO(dinosaure): we have a special case for the stdlib. The question is: why
+   we don't pick [Stdlib__*] (or [stdlib.cmxa]) from what the [META] gives to
+   us? We should check that we interpret, as [ocamlfind], correctly the given
+   [META] file from the OCaml distribution. *)
+
+let verify ~cfg g =
   let exports = Hashtbl.create 0x7ff in
-  let fn0 (mpath, _) =
+  let fn2 (mpath, _) =
     match Uniq_info.Path.to_list mpath with
     | [ m ] -> Hashtbl.replace exports m ()
     | _ -> ()
   in
-  let fn1 t = List.iter fn0 (Uniq_info.exports t) in
-  List.iter fn1 infos;
-  let fn acc t =
-    let intfs, impls = Uniq_info.missing t in
-    let intfs = List.to_seq intfs in
-    let impls = List.to_seq impls in
-    acc |> MSet.add_seq impls |> MSet.add_seq intfs
+  let fn1 info = List.iter fn2 (Uniq_info.exports info) in
+  let fn0 _ node = List.iter fn1 node.objs in
+  Uniq_meta.Path.Map.iter fn0 g;
+  let candidates = Hashtbl.create 0x7ff in
+  let fn2 modname =
+    if not (Hashtbl.mem exports modname) then
+      Hashtbl.replace candidates modname ()
   in
-  let ms = List.fold_left fn MSet.empty infos in
-  let ms = MSet.elements ms in
-  let fn modname =
-    (not (MSet.mem modname cfg.Config.ignore))
-    && not (Hashtbl.mem exports modname)
+  let fn1 info =
+    let intfs, impls = Uniq_info.missing info in
+    List.iter fn2 (intfs @ impls)
   in
-  match List.filter fn ms with
+  let fn0 _ node = List.iter fn1 node.objs in
+  Uniq_meta.Path.Map.iter fn0 g;
+  let candidates = Hashtbl.fold (fun m () acc -> m :: acc) candidates [] in
+  let fn acc (modname, pkgs) =
+    match pkgs with [] -> acc | _ -> MSet.add modname acc
+  in
+  let providers = Uniq_meta.find_providers ~roots:cfg.Config.roots candidates in
+  let provided = List.fold_left fn MSet.empty providers in
+  let fn m = (not (is_stdlib m)) && not (MSet.mem m provided) in
+  match List.filter fn candidates with
   | [] -> Ok ()
-  | _ -> error_msgf "Unqualified dependencies"
+  | missing ->
+      error_msgf
+        "Impossible to statically link your program (missing module(s): \
+         @[<hov>%a@])"
+        Fmt.(Dump.list Modname.pp)
+        missing
 
 let solve ~cfg ?(disambiguate = fail_on_ambiguity) dirs =
   let ( let* ) = Result.bind in
@@ -353,7 +382,7 @@ let solve ~cfg ?(disambiguate = fail_on_ambiguity) dirs =
     ; committed= Uniq_meta.Path.Set.empty
     }
   in
-  let* state, directs = step ~cfg state dirs in
+  let* state, directs = step0 ~cfg state dirs in
   let resolve state modules =
     let fn acc (m, crc) = Modname.Map.add m crc acc in
     let crc_of = List.fold_left fn Modname.Map.empty modules in
@@ -372,5 +401,5 @@ let solve ~cfg ?(disambiguate = fail_on_ambiguity) dirs =
     in
     (state, List.rev acc)
   in
-  let _state, pkgs = solve ~cfg state ~resolve directs in
-  verify ~cfg dirs (List.map snd (Uniq_meta.Path.Map.to_list pkgs))
+  let _state, g = solve ~cfg state ~resolve directs in
+  verify ~cfg g

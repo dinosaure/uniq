@@ -252,7 +252,7 @@ let parser lexbuf =
       error_msgf "%s at l.%d, c.%d: %s" f l c msg
 
 let parser path =
-  Log.debug (fun m -> m "Parse %a" Fpath.pp path);
+  Log.debug (fun m -> m "parse %a" Fpath.pp path);
   let ( let@ ) finally fn = Fun.protect ~finally fn in
   let ic = open_in (Fpath.to_string path) in
   let@ _ = fun () -> close_in ic in
@@ -310,7 +310,7 @@ let search ~roots ?(predicates = [ "native"; "byte" ]) meta_path =
     | Ok descr -> Fpath.Map.add Fpath.(root // parent rel) descr acc
     | Error (`Msg msg) ->
         Log.warn (fun m ->
-            m "Impossible to extract the META file of %a: %s" Fpath.pp path msg);
+            m "impossible to extract the META file of %a: %s" Fpath.pp path msg);
         acc
   in
   let err _path _ = Ok () in
@@ -480,6 +480,12 @@ let register_if_target targets full modname acc =
 (* Scan the .cmi files inside [dir_str] and register every top-level module
    whose name belongs to [targets].  When [check_submodules] is true, also
    open each .cmi to discover sub-modules (e.g. Cmdliner exports Cmd, Term). *)
+
+(* TODO(dinosaure): we have a bug with [x509] and a third (sub)module:
+   [X509.Distinguished_name.Relative_distinguished_name]. When we do a
+   double-opne (for [X509] and [Distinguished_name]), [codept] tries to
+   search a [Relative_distinguished_name] which is not defined. [x509]
+   misses its [x509__Distinguished_name.cmi]... *)
 let scan_cmis ~and_submodules ~targets ~full ~dname acc =
   if Sys.file_exists dname && Sys.is_directory dname then
     let files = Sys.readdir dname in
