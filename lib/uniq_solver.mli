@@ -18,8 +18,16 @@ exception Ambiguous of Modname.t * Uniq_meta.Path.t list
 
 val fail_on_ambiguity : disambiguate
 
+type node = {
+    dirpath: Fpath.t
+  ; objs: Uniq_info.t list
+  ; deps: (Uniq_meta.Path.t * [ `CRC | `Name ]) list
+}
+
+type graph = node Uniq_meta.Path.Map.t
+
 val solve :
      cfg:Config.t
   -> ?disambiguate:disambiguate
   -> Fpath.t list
-  -> (unit, [> `Msg of string ]) result
+  -> (graph, [> `Msg of string ]) result

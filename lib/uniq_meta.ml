@@ -529,6 +529,24 @@ let scan_mlis ~and_submodules:_ ~targets ~full ~dname acc =
           in
           let modname = Namespaced.module_name namespace in
           let modules = Uniq_info.collect_modules_on_mli ~modname v.Unit.code in
+          (* NOTE(dinosaure): the objective here is to try to find some modules
+             which exists surely into a "sub-sub-module". A module (the first
+             [_]) can be recognized via [*.cmi]. Inside it, we can find
+             sub-modules (the second [_]). But we are not able to recognize
+             sub-sub-module. For instance, we can have this code:
+
+             {[
+               open X509
+               open Distinguished_name
+
+               let v = Relative_distinguished_name.empty
+             ]}
+
+             [codept] will asks where is [Relative_distinguished_name] but it
+             can prove that this module comes from [x509]. So if we still have
+             remaining modules, we will try to introspect [*.mli] and find such
+             modules. It should be noted that this is our last chance and we
+             should not make this method of searching for packages the norm. *)
           let fn path acc =
             match Uniq_info.Path.to_list path with
             | _ :: _ :: rem ->
@@ -618,7 +636,7 @@ let find_providers ~roots ?(predicates = [ "native"; "byte" ]) modules =
       walk_meta_files ~roots ~predicates ~and_submodules:true ~targets:remaining
         result
   in
-  (* Pass 3: for unresolved modules, also check sub-*-module exports via *.mli *)
+  (* Pass 3: for unresolved modules, also check sub-*-module exports via [*.mli] *)
   let resolved =
     Modname.Map.fold (fun m _ s -> MSet.add m s) result MSet.empty
   in

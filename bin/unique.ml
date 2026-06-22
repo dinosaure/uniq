@@ -1,3 +1,7 @@
+module Meta = Uniq_meta
+module Info = Uniq_info
+module Solver = Uniq_solver
+
 let prompt modname pkgs =
   let pp_pkg_with_idx ppf (idx, pkg) =
     Fmt.pf ppf "  [%d] %a" idx Uniq_meta.Path.pp pkg
@@ -16,11 +20,50 @@ let prompt modname pkgs =
       | _ -> raise (Uniq_solver.Ambiguous (modname, pkgs))
       end
 
+let has_c_stubs node = List.exists Uniq_info.has_c_stubs node.Solver.objs
+
+let pp_elt ppf (pkg, dirpath) =
+  Fmt.pf ppf "%a(%a)" Meta.Path.pp pkg Fpath.pp dirpath
+
+let pp_node ppf (pkg, { Solver.dirpath; _ }) =
+  Fmt.pf ppf "%a(%a)" Meta.Path.pp pkg Fpath.pp dirpath
+
 let run_solver _quiet _cfg0 cfg1 dirs =
   let ( let* ) = Result.bind in
-  let* () = Uniq_solver.solve ~cfg:cfg1 ~disambiguate:prompt dirs in
-  Fmt.pr "Project verified!\n%!";
+  let* g = Uniq_solver.solve ~cfg:cfg1 ~disambiguate:prompt dirs in
+  let pkgs =
+    let memo = Hashtbl.create 0x7ff in
+    let rec vendor visiting path =
+      match Hashtbl.find_opt memo path with
+      | Some value -> value
+      | None ->
+          begin if List.mem path visiting then false
+          else
+            match Meta.Path.Map.find_opt path g with
+            | None -> false
+            | Some node ->
+                let has_c_stubs = has_c_stubs node in
+                let trans =
+                  List.exists
+                    (fun (pkg, _) -> vendor (path :: visiting) pkg)
+                    node.Solver.deps
+                in
+                Hashtbl.replace memo path (has_c_stubs || trans);
+                has_c_stubs || trans
+          end
+    in
+    let fn path node acc =
+      if vendor [] path then (path, node.Solver.dirpath) :: acc else acc
+    in
+    Meta.Path.Map.fold fn g []
+  in
+  Uniq_opam.with_switch_state @@ fun _sw ->
+  Fmt.pr "@[<hov>%a@]\n%!" Fmt.(Dump.list pp_node) (Meta.Path.Map.to_list g);
+  Fmt.pr "@[<hov>%a@]\n%!" Fmt.(Dump.list pp_elt) pkgs;
   Ok ()
+
+let run_solver _quiet _cfg0 cfg1 dirs =
+  run_solver _quiet _cfg0 cfg1 dirs |> Result.join
 
 open Cmdliner
 open Uniq_cli

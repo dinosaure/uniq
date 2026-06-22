@@ -269,6 +269,8 @@ type node = {
   ; deps: (Meta.Path.t * [ `CRC | `Name ]) list
 }
 
+type graph = node Uniq_meta.Path.Map.t
+
 let solve ~cfg state ~resolve directs =
   let dedup =
     let tbl = Hashtbl.create 0x7ff in
@@ -414,4 +416,5 @@ let solve ~cfg ?(disambiguate = fail_on_ambiguity) dirs =
         (state, List.rev acc)
   in
   let _state, g = solve ~cfg state ~resolve directs in
-  verify ~cfg g
+  let* () = verify ~cfg g in
+  Ok g
