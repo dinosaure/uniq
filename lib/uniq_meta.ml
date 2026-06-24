@@ -5,6 +5,12 @@ module Log = (val Logs.src_log src : Logs.LOG)
 let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 let ( let* ) = Result.bind
 
+let absolute =
+  let cwd = Fpath.v (Sys.getcwd ()) in
+  fun path ->
+    let path = if Fpath.is_rel path then Fpath.(cwd // path) else path in
+    Fpath.normalize path
+
 type t =
   | Node of { name: string; value: string; contents: t list }
       (** [name] "[value]" ( [contents] ), like [package "lib" ( ... )] *)
@@ -642,3 +648,111 @@ let find_providers ~roots ?(predicates = [ "native"; "byte" ]) modules =
         ~targets:remaining result
   in
   dedup result
+
+type archive = Stdlib of Fpath.t | Library of Path.t * Fpath.t * Assoc.t
+
+type package = {
+    pkg: Path.t
+  ; meta_dirpath: Fpath.t
+  ; dirpath: Fpath.t
+  ; descr: Assoc.t
+}
+
+let packages_with_archive ?(predicates = [ "native"; "byte" ]) roots =
+  let elements path =
+    let str = Fpath.to_string path in
+    if not (Sys.file_exists str) then Ok false
+    else if Sys.is_directory str then Ok false
+    else Ok (Fpath.basename path = "META")
+  in
+  let fn meta acc =
+    let _, rel = relativize ~roots meta in
+    let segs = Fpath.(segs (rem_empty_seg (parent rel))) in
+    let base = List.filter (fun s -> s <> "") segs in
+    match parser meta with
+    | Error _ -> acc
+    | Ok m ->
+        let metad = Fpath.(parent meta |> rem_empty_seg) in
+        let fn acc local =
+          let full = base @ local in
+          let descr = compile ~predicates m local in
+          if has_archive descr then
+            let dname = package_directory metad descr in
+            { pkg= full; meta_dirpath= metad; dirpath= dname; descr } :: acc
+          else acc
+        in
+        List.fold_left fn acc (subpaths m)
+  in
+  let err _path _ = Ok () in
+  Bos.OS.Path.fold ~err ~dotfiles:false ~elements:(`Sat elements) ~traverse:`Any
+    fn [] roots
+  |> Result.value ~default:[]
+
+let dir_owns_cmi ~dname ~modname ~crc =
+  match crc with
+  | None -> false
+  | Some crc ->
+      let dir = Fpath.to_string dname in
+      if Sys.file_exists dir && Sys.is_directory dir then
+        let same_crc filepath =
+          match Uniq_info.v filepath with
+          | Ok info ->
+              let crc' = Uniq_info.crc_of info modname in
+              Stdlib.Option.map (Uniq_digest.equal crc) crc'
+              |> Stdlib.Option.value ~default:false
+          | Error _ -> false
+        in
+        let check fname =
+          try
+            let base = Filename.chop_suffix fname ".cmi" in
+            (* Filename.check_suffix fname ".cmi"
+          && *)
+            Modname.compare Modname.(v (normalize base)) modname = 0
+            && same_crc Fpath.(dname / fname)
+          with _exn -> false
+        in
+        Array.exists check (Sys.readdir dir)
+      else false
+
+let stdlib_package dir =
+  let dirpath = absolute (Fpath.to_dir_path dir) in
+  Stdlib dirpath
+
+let from_cmi_to_impl ~roots ~packages:candidates ?stdlib filepath =
+  if Fpath.mem_ext [ ".cmi" ] filepath = false then
+    invalid_arg "You must give a *.cmi file";
+  if List.exists (fun root -> Fpath.is_rooted ~root filepath) roots = false then
+    Fmt.invalid_arg "The given *.cmi (%a) is not a part of your roots" Fpath.pp
+      filepath;
+  let* info = Uniq_info.v filepath in
+  if Uniq_info.is_a_cmi info = false then
+    Fmt.invalid_arg "The given *.cmi (%a) is not a valid CMI file" Fpath.pp
+      filepath;
+  let modname = Uniq_info.modname info in
+  let crc = Uniq_info.crc_of info modname in
+  let cmi_dirpath = absolute Fpath.(parent filepath |> to_dir_path) in
+  let is_stdlib =
+    match stdlib with
+    | Some dirpath ->
+        Fpath.equal (absolute (Fpath.to_dir_path dirpath)) cmi_dirpath
+    | None -> false
+  in
+  if is_stdlib then Ok (Some (stdlib_package (Stdlib.Option.get stdlib)))
+  else
+    let owns { dirpath; _ } = dir_owns_cmi ~dname:dirpath ~modname ~crc in
+    let pick { pkg; meta_dirpath; descr; _ } =
+      Library (pkg, meta_dirpath, descr)
+    in
+    let same_dir { dirpath; _ } = Fpath.equal (absolute dirpath) cmi_dirpath in
+    match List.filter same_dir candidates with
+    | [ pkg ] -> Ok (Some (pick pkg))
+    | _ :: _ :: _ as several -> (
+        (* The directory is shared by several (sub)packages: disambiguate by [crc]. *)
+        match List.filter owns several with
+        | pkg :: _ -> Ok (Some (pick pkg))
+        | [] -> Ok None)
+    | [] -> (
+        (* No directory match (e.g. the [*.cmi] was relocated): scan by [crc]. *)
+        match List.filter owns candidates with
+        | pkg :: _ -> Ok (Some (pick pkg))
+        | [] -> Ok None)

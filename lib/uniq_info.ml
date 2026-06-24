@@ -252,40 +252,55 @@ let kind t =
 let elt_name = function
   | Qualified (x, _) | Fully_qualified (x, _, _) | Named x | Located (x, _) -> x
 
-exception Downgrade
-
-let elt_replace elt elts =
-  List.fold_left
-    (fun acc elt' ->
-      let a = elt_name elt in
-      let b = elt_name elt' in
-      if Modname.compare a b = 0 then
-        match (elt', elt) with
-        | Named _, _ -> elt :: acc
-        | Qualified _, Named _ -> raise Downgrade
-        | Fully_qualified _, Named _ -> raise Downgrade
-        | Located _, Named _ -> raise Downgrade
-        | Qualified (_, crc), Located (_, path) ->
-            Fully_qualified (a, crc, path) :: acc
-        | Qualified (_, crc), Fully_qualified (_, crc', _) ->
-            if Uniq_digest.equal crc crc' then elt :: acc else raise Downgrade
-        | Located _, Qualified _ -> assert false
-        | Located (_, path), Fully_qualified (_, _, path') ->
-            if Fpath.equal path path' then elt :: acc else raise Downgrade
-        | Fully_qualified (_, crc, _), Qualified (_, crc') ->
-            if Uniq_digest.equal crc crc' then elt' :: acc else raise Downgrade
-        | Fully_qualified _, Located _ -> raise Downgrade
-        | Qualified (_, crc), Qualified (_, crc') ->
-            if Uniq_digest.equal crc crc' then elt :: acc else raise Downgrade
-        | Fully_qualified (_, crc, path), Fully_qualified (_, crc', path') ->
-            if Uniq_digest.equal crc crc' && Fpath.equal path path' then
-              elt :: acc
-            else raise Downgrade
-        | Located (_, path), Located (_, path') ->
-            if Fpath.equal path path' then elt :: acc else raise Downgrade
-      else elt' :: acc)
-    [] elts
-  |> List.rev
+let elt_replace unitname new_value elts =
+  let fn acc old_value =
+    let a = elt_name new_value in
+    let b = elt_name old_value in
+    if Modname.compare a b = 0 then
+      match (old_value, new_value) with
+      (* promotion [Named -> *] *)
+      | Named _, _ -> new_value :: acc
+      (* keep best [old_value] against [Named] *)
+      | Qualified _, Named _ -> old_value :: acc
+      | Fully_qualified _, Named _ -> old_value :: acc
+      | Located _, Named _ -> old_value :: acc
+      (* promotion [Qualified with Located -> Fully_qualified] *)
+      | Qualified (_, crc), Located (_, path) ->
+          Fully_qualified (a, crc, path) :: acc
+      (* promotion [Qualified -> Fully_qualified] *)
+      | Qualified (_, crc), Fully_qualified (_, crc', _) ->
+          if Uniq_digest.equal crc crc' then new_value :: acc
+          else raise (Inconsistency (unitname, a, crc, crc'))
+      (* ignore [Qualified] because we can not check [crc] from [Located] *)
+      | Located _, Qualified _ -> old_value :: acc
+      (* promotion [Located -> Fully_qualified] iff they refer to the same artifact *)
+      | Located (_, path), Fully_qualified (_, _, path') ->
+          if Fpath.equal path path' then new_value :: acc
+          else old_value :: acc (* TODO(dinosaure): raise or ignore? *)
+      (* check [crc] and keep [Fully_qualified] or raise *)
+      | Fully_qualified (_, crc, _), Qualified (_, crc') ->
+          if Uniq_digest.equal crc crc' then old_value :: acc
+          else raise (Inconsistency (unitname, a, crc, crc'))
+      (* ignore but we should raise if [path] is not the same *)
+      | Fully_qualified _, Located _ -> old_value :: acc
+      (* identity or raise if [crc] is not the same *)
+      | Qualified (_, crc), Qualified (_, crc') ->
+          if Uniq_digest.equal crc crc' then new_value :: acc
+          else raise (Inconsistency (unitname, a, crc, crc'))
+      (* identity or raise if [crc] is not the same,
+         ignore if [path] is not the same (or raise?) *)
+      | Fully_qualified (_, crc, path), Fully_qualified (_, crc', path') ->
+          if Uniq_digest.equal crc crc' && Fpath.equal path path' then
+            new_value :: acc
+          else if Uniq_digest.equal crc crc' = false then
+            raise (Inconsistency (unitname, a, crc, crc'))
+          else old_value :: acc
+      (* identity or ignore if [path] is the same *)
+      | Located (_, path), Located (_, path') ->
+          if Fpath.equal path path' then new_value :: acc else old_value :: acc
+    else old_value :: acc
+  in
+  List.fold_left fn [] elts |> List.rev
 
 let qualify t ?location ?crc kind modname =
   Log.debug (fun m -> m "requalify %a" pp t);
@@ -296,11 +311,9 @@ let qualify t ?location ?crc kind modname =
     | None, None -> Named modname
     | Some location, None -> Located (modname, location)
   in
-  try
-    match kind with
-    | `Intf -> Some { t with intfs= elt_replace elt t.intfs }
-    | `Impl -> Some { t with impls= elt_replace elt t.impls }
-  with Downgrade -> None
+  match kind with
+  | `Intf -> { t with intfs= elt_replace t.name elt t.intfs }
+  | `Impl -> { t with impls= elt_replace t.name elt t.impls }
 
 let elt_compare a b =
   let a = elt_name a in

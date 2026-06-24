@@ -40,6 +40,34 @@ val find_providers :
   -> Modname.t list
   -> (Modname.t * Path.t list) list
 
+type archive = Stdlib of Fpath.t | Library of Path.t * Fpath.t * Assoc.t
+type package
+
+val packages_with_archive :
+  ?predicates:string list -> Fpath.t list -> package list
+
+val from_cmi_to_impl :
+     roots:Fpath.t list
+  -> packages:package list
+  -> ?stdlib:Fpath.t
+  -> Fpath.t
+  -> (archive option, [> `Msg of string ]) result
+(** [from_cmi_to_impl ~roots cmi] associates the given [cmi] artifact with the
+    [ocamlfind] package that ships it. It returns the package's {!type:Path.t},
+    the directory holding its [META] file and its descriptor — a triple whose
+    [(directory, descriptor)] projection is directly consumable by
+    {!val:to_artifacts} to obtain the implementation archives. It returns [None]
+    when no package under [roots] owns the [cmi] (e.g. a project-local unit).
+
+    The association is done by directory first (the [cmi] physically lives in
+    its package's [directory]) and falls back to an interface digest comparison
+    when the directory is ambiguous or does not match.
+
+    [stdlib], when provided, is the OCaml standard library directory (e.g. from
+    the compiler configuration of the chosen toolchain). A [cmi] sitting there
+    is associated with the synthetic [stdlib] package, since the standard
+    library ships no [META] file. *)
+
 (**/*)
 
 val ancestors :

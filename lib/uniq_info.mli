@@ -61,12 +61,7 @@ val missing :
   t -> (Modname.t * Digest.t option) list * (Modname.t * Digest.t option) list
 
 val qualify :
-     t
-  -> ?location:Fpath.t
-  -> ?crc:Digest.t
-  -> [ `Intf | `Impl ]
-  -> Modname.t
-  -> t option
+  t -> ?location:Fpath.t -> ?crc:Digest.t -> [ `Intf | `Impl ] -> Modname.t -> t
 
 val show : t Fmt.t
 val pp : t Fmt.t

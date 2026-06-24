@@ -62,13 +62,31 @@ let their_are_copies = function
       let fn1 e' = try List.for_all2 fn0 e e' with _ -> false in
       List.for_all fn1 rem
 
+(* NOTE(dinosaure): [List.length solutions >= 1] *)
+let prefer_stdlib ?stdlib solutions =
+  match stdlib with
+  | None -> List.hd solutions
+  | Some dir ->
+      let dir = Fpath.(normalize (to_dir_path dir)) in
+      let in_stdlib info =
+        let where = Uniq_info.location info in
+        Fpath.equal dir Fpath.(normalize (to_dir_path (parent where)))
+      in
+      List.find_opt in_stdlib solutions
+      |> Stdlib.Option.value ~default:(List.hd solutions)
+
 let pp_module ppf (modname, crc) =
   match crc with
   | Some crc -> Fmt.pf ppf "%a(%a)" Modname.pp modname Uniq_digest.pp crc
   | None -> Modname.pp ppf modname
 
-let run _quiet _cfg0 cfg1 dirs =
+let run _quiet cfg0 cfg1 dirs =
   let ( let* ) = Result.bind in
+  let stdlib =
+    match cfg0 with
+    | Some cfg -> Uniq_cfg.get cfg ~key:"standard_library" Uniq_cfg.Value.path
+    | None -> None
+  in
   let cfg =
     Uniq_solver.Ng.config ~stdlib:cfg1.Solver.Config.stdlib
       ~recurse:cfg1.Solver.Config.recurse ~exclude:cfg1.Solver.Config.exclude
@@ -98,19 +116,42 @@ let run _quiet _cfg0 cfg1 dirs =
     match solutions with
     | [ info ] -> Some info
     | [] -> None
-    | info :: _ as solutions when their_are_copies solutions -> Some info
+    | _ :: _ as solutions when their_are_copies solutions ->
+        (* NOTE(dinosaure): we can have similar artifacts from [ocaml] and
+           [ocaml-solo5] when its about the standard library. To not mislead
+           next steps, we take the right artifact according to our toolchain
+           configuration even though we can choose any of the options without a
+           doubt! *)
+        Some (prefer_stdlib ?stdlib solutions)
     | _ :: _ as solutions ->
         Logs.err (fun m -> m "Multiple solutions for %a" Modname.pp modname);
         Logs.err (fun m ->
             m "@[<hov>%a@]" Fmt.(list ~sep:(any ",@ ") Info.pp) solutions);
         assert false
   in
-  let* infos, modules = Solver.Ng.solve_intfs ~cfg ~providers dirs in
-  Fmt.pr ">>> Missing modules: @[<hov>%a@]\n%!"
-    Fmt.(list ~sep:(any ",@ ") pp_module)
-    modules;
-  Fmt.pr ">>> Artifacts collected:\n%!";
-  Fmt.pr "@[<hov>%a@]\n%!" Fmt.(list ~sep:(any ";@ ") Info.pp) infos;
+  let* infos, _private_modules = Solver.Ng.solve_intfs ~cfg ~providers dirs in
+  let cmis = List.filter Uniq_info.is_a_cmi infos in
+  let pkgs = Meta.packages_with_archive roots in
+  let* assoc =
+    let fn acc info =
+      let* acc = acc in
+      let* pkg =
+        Meta.from_cmi_to_impl ~roots ~packages:pkgs ?stdlib
+          (Uniq_info.location info)
+      in
+      Ok ((info, pkg) :: acc)
+    in
+    List.fold_left fn (Ok []) cmis
+  in
+  List.iter
+    (fun (info, pkg) ->
+      match pkg with
+      | Some (Meta.Library (path, _, _)) ->
+          Fmt.pr "  %a => %a\n%!" Info.pp info Meta.Path.pp path
+      | Some (Meta.Stdlib _) -> Fmt.pr "  %a (stdlib)\n%!" Info.pp info
+      | None ->
+          Fmt.pr "  %a => %a\n%!" Info.pp info Fmt.(styled `Red string) "<none>")
+    (List.rev assoc);
   Ok ()
 
 let run _quiet _cfg0 cfg1 dirs =

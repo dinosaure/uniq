@@ -458,10 +458,6 @@ module Ng = struct
       let path = if Fpath.is_rel path then Fpath.(cwd // path) else path in
       Fpath.normalize path
 
-  exception
-    Impossible_to_requalify of
-      Info.t * Fpath.t * Digest.t option * [ `Intf | `Impl ] * Modname.t
-
   (* NOTE(dinosaure): we try to solve missing modules from what we already have.
      For instance, a [*.ml] can requires [x509] but we also have [x509.cmi] as
      an artifact into our [infos]:
@@ -500,12 +496,7 @@ module Ng = struct
           Log.debug (fun mf ->
               mf "take %a for %a" Info.pp solution Modname.pp m);
           let location = Info.location solution in
-          let fn info =
-            match Info.qualify info ~location ?crc `Intf m with
-            | Some info -> info
-            | None ->
-                raise (Impossible_to_requalify (info, location, crc, `Intf, m))
-          in
+          let fn info = Info.qualify info ~location ?crc `Intf m in
           let infos = List.map fn infos in
           (infos, true, rem)
       | _ :: _ as solutions ->
@@ -564,12 +555,7 @@ module Ng = struct
              gives to us. We can observe some requalification from [Location] to
              [Fully_qualified] which is fine but I suspect an override of the
              [crc] sometimes... *)
-          let fn info =
-            match Info.qualify info ~location ?crc `Intf m with
-            | Some info -> info
-            | None ->
-                raise (Impossible_to_requalify (info, location, crc, `Intf, m))
-          in
+          let fn info = Info.qualify info ~location ?crc `Intf m in
           let infos = List.map fn infos in
           Log.debug (fun m -> m "add %a" Info.pp solution);
           (solution :: infos, true, rem)

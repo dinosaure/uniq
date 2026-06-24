@@ -73,8 +73,6 @@ let qualify_by_crc gamma =
         in
         let location = Info.location v in
         let t = Info.qualify t ~location ?crc k modname in
-        let t = Stdlib.Option.get t in
-        (* TODO(dinosaure): check that we re-qualify everything and upgrade correctly deps! *)
         (by_modname, t)
     | Some _v ->
         Logs.err (fun m -> m "%a => %a" Modname.pp modname Info.pp _v);
@@ -123,7 +121,7 @@ let qualify_objects gamma =
     | Some v, _ ->
         let location = Info.location v in
         let crc = Info.crc_of v modname in
-        (gamma, Info.qualify t ~location ?crc k modname |> Stdlib.Option.get)
+        (gamma, Info.qualify t ~location ?crc k modname)
     | None, Some vs ->
         let v = choose modname vs in
         let location = Info.location v in
@@ -133,7 +131,7 @@ let qualify_objects gamma =
           | `Intf -> (Modname.Map.add modname v (fst gamma), snd gamma)
           | `Impl -> (fst gamma, Modname.Map.add modname v (snd gamma))
         in
-        (gamma, Info.qualify t ~location ?crc k modname |> Stdlib.Option.get)
+        (gamma, Info.qualify t ~location ?crc k modname)
   in
   let is_none = Stdlib.Option.is_none in
   let fold (gamma, ts) t =
