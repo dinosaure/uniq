@@ -720,7 +720,8 @@ let stdlib_package dir =
   let dirpath = absolute (Fpath.to_dir_path dir) in
   Stdlib dirpath
 
-let from_cmi_to_impl ~roots ~packages:candidates ?stdlib filepath =
+let from_cmi_to_impl ~roots ~packages:candidates ?stdlib
+    ?(ambiguity = fun _ paths -> List.hd paths) filepath =
   if Fpath.mem_ext [ ".cmi" ] filepath = false then
     invalid_arg "You must give a *.cmi file";
   if List.exists (fun root -> Fpath.is_rooted ~root filepath) roots = false then
@@ -746,18 +747,72 @@ let from_cmi_to_impl ~roots ~packages:candidates ?stdlib filepath =
       Library (pkg, meta_dirpath, descr)
     in
     let same_dir { dirpath; _ } = Fpath.equal (absolute dirpath) cmi_dirpath in
-    match List.filter same_dir candidates with
-    | [ pkg ] -> Ok (Some (pick pkg))
-    | _ :: _ :: _ as several -> (
-        (* The directory is shared by several (sub)packages: disambiguate by [crc]. *)
-        match List.filter owns several with
-        | pkg :: _ -> Ok (Some (pick pkg))
-        | [] -> Ok None)
-    | [] -> (
-        (* No directory match (e.g. the [*.cmi] was relocated): scan by [crc]. *)
-        match List.filter owns candidates with
-        | pkg :: _ -> Ok (Some (pick pkg))
-        | [] -> Ok None)
+    (* Does the archive of this (sub)package actually pack [modname]? Several
+       sibling subpackages may sit in the same directory and all {e own} the
+       shared [*.cmi] (e.g. [fpath] and [fpath.top], or [digestif.c] and
+       [digestif.ocaml]); the one we want is the one whose archive {e packs}
+       the interface's module ([Fpath] lives in [fpath.cmxa], not in
+       [fpath_top.cmxa] which packs [Fpath_top]). *)
+    let packs_module { meta_dirpath; descr; _ } =
+      match to_artifacts [ (meta_dirpath, descr) ] with
+      | Error _ -> false
+      | Ok archives ->
+          let provides info =
+            let fn (path, _) =
+              match List.rev (Uniq_info.Path.to_list path) with
+              | leaf :: _ -> Modname.compare leaf modname = 0
+              | [] -> false
+            in
+            List.exists fn (Uniq_info.exports info)
+          in
+          List.exists provides archives
+    in
+    (* Among candidates that all locate the [*.cmi], prefer the one whose
+       archive packs [modname]. When several pack it — a genuine choice between
+       equivalent implementations (e.g. [digestif.c] vs [digestif.ocaml]) — we
+       defer to [ambiguity], which the caller may turn into a prompt. *)
+    let choose = function
+      | [] -> None
+      | [ pkg ] -> Some pkg
+      | pkgs -> (
+          match List.filter packs_module pkgs with
+          | [] -> Some (List.hd pkgs)
+          | [ pkg ] -> Some pkg
+          | _ :: _ as several -> (
+              let chosen = ambiguity modname (List.map (fun p -> p.pkg) several) in
+              match List.find_opt (fun p -> Path.equal p.pkg chosen) several with
+              | Some pkg -> Some pkg
+              | None -> Some (List.hd several)))
+    in
+    (* Sibling subpackages of [path] under the same parent ocamlfind package.
+       Alternative implementations of one interface live there: [digestif.c] and
+       [digestif.ocaml] each ship their own copy of [digestif.cmi], so whichever
+       copy was picked upstream, the other implementation is a sibling. *)
+    let siblings path =
+      match Path.parent path with
+      | Some (_ :: _ as parent) ->
+          let fn c =
+            (not (Path.equal c.pkg path))
+            &&
+            match Path.parent c.pkg with
+            | Some p -> Path.equal p parent
+            | None -> false
+          in
+          List.filter fn candidates
+      | _ -> []
+    in
+    let result =
+      match List.filter same_dir candidates with
+      | [ pkg ] -> (
+          (* Unique in this directory, but a sibling subpackage may implement
+             the same interface ([digestif.c] vs [digestif.ocaml]); when one
+             does, the choice is genuinely ambiguous. *)
+          match siblings pkg.pkg with [] -> Some pkg | sibs -> choose (pkg :: sibs))
+      | _ :: _ :: _ as several -> choose several
+      (* No directory match (e.g. the [*.cmi] was relocated): scan by [crc]. *)
+      | [] -> choose (List.filter owns candidates)
+    in
+    Ok (Stdlib.Option.map pick result)
 
 let archives_of ~roots ?(predicates = [ "native"; "byte" ]) = function
   | Stdlib dirpath ->

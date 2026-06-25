@@ -37,13 +37,13 @@
  (name unic_info)
  (modules unic_info)
  (public_name unic.info)
- (libraries compiler-libs.common uniq.solver uniq.vendor unic.cli))
+ (libraries compiler-libs.common uniq.solver unic.cli))
 
 (library
  (name unic_infer)
  (modules unic_infer)
  (public_name unic.infer)
- (libraries compiler-libs.common uniq.cfg uniq.solver uniq.vendor unic.cli))
+ (libraries compiler-libs.common uniq.cfg uniq.solver uniq.clos uniq.vendor unic.cli))
 
 (executable
  (name unic)

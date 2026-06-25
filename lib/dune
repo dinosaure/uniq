@@ -47,7 +47,21 @@
  (public_name uniq.solver)
  (modules uniq_solver)
  (wrapped false)
- (libraries logs fmt fpath uniq.cfg uniq.policy uniq.papam uniq.meta))
+ (libraries logs fmt fpath uniq.cfg uniq.mod))
+
+(library
+ (name uniq_clos)
+ (public_name uniq.clos)
+ (modules uniq_clos)
+ (wrapped false)
+ (libraries logs fmt fpath uniq.cfg uniq.meta))
+
+(library
+ (name uniq_vendor)
+ (public_name uniq.vendor)
+ (modules uniq_vendor)
+ (wrapped false)
+ (libraries uniq.mod))
 
 (library
  (name uniq_policy)
@@ -56,9 +70,9 @@
  (wrapped false)
  (libraries uniq.meta bcfgt))
 
-(library
- (name uniq_vendor)
- (public_name uniq.vendor)
- (modules uniq_vendor)
- (wrapped false)
- (libraries uniq.solver))
+; (library
+;  (name uniq_vendor)
+;  (public_name uniq.vendor)
+;  (modules uniq_vendor)
+;  (wrapped false)
+;  (libraries uniq.solver))
