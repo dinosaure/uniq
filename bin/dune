@@ -43,14 +43,57 @@
  (name unic_infer)
  (modules unic_infer)
  (public_name unic.infer)
- (libraries compiler-libs.common uniq.cfg uniq.solver uniq.clos uniq.vendor unic.cli))
+ (libraries
+  compiler-libs.common
+  uniq.cfg
+  uniq.solver
+  uniq.clos
+  uniq.vendor
+  unic.cli))
+
+(library
+ (name unic_qualify)
+ (modules unic_qualify)
+ (public_name unic.qualify)
+ (libraries compiler-libs.common unic.cli uniq.cfg uniq.mod))
+
+(library
+ (name unic_meta)
+ (modules unic_meta)
+ (public_name unic.meta)
+ (libraries compiler-libs.common unic.cli uniq.meta))
+
+(library
+ (name unic_digest)
+ (modules unic_digest)
+ (public_name unic.digest)
+ (libraries compiler-libs.common unic.cli uniq.mod))
+
+(library
+ (name unic_resolve)
+ (modules unic_resolve)
+ (public_name unic.resolve)
+ (libraries compiler-libs.common unic.cli uniq.cfg uniq.meta uniq.mod))
+
+(library
+ (name unic_cfg)
+ (modules unic_cfg)
+ (public_name unic.cfg)
+ (libraries compiler-libs.common unic.cli uniq.cfg))
 
 (executable
  (name unic)
  (package unic)
  (modules unic)
  (public_name unic)
- (libraries unic.infer unic.info))
+ (libraries
+  unic.infer
+  unic.info
+  unic.qualify
+  unic.meta
+  unic.digest
+  unic.resolve
+  unic.cfg))
 
 (library
  (name unic_cli)

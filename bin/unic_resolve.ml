@@ -24,23 +24,25 @@ module Elt = struct
           pkgs
 end
 
-let run cfg recurse root no_stdlib ocamlfind_roots =
+let run _quiet cfg recurse root without_stdlib ocamlfind_roots =
   let sources = Uniq_resolve.Src.sources ~recurse root in
   let srcs =
     match cfg with
     | None -> [ sources ]
     | Some cfg ->
-        begin if no_stdlib then [ sources ]
+        begin if without_stdlib then [ sources ]
         else
           match Uniq_cfg.(get cfg ~key:"standard_library" Value.path) with
           | Some stdlib -> [ sources; Uniq_resolve.Src.objects stdlib ]
           | None -> [ sources ]
         end
   in
-  let* ts = Uniq_resolve.qualify ~stdlib:(not no_stdlib) srcs in
+  let* ts = Uniq_resolve.qualify ~stdlib:(not without_stdlib) srcs in
   let intfs, impls =
     let fn (intfs, impls) t =
       let intfs', impls' = Uniq_info.missing t in
+      let intfs' = List.map fst intfs' in
+      let impls' = List.map fst impls' in
       let intfs = Set.add_seq (List.to_seq intfs') intfs in
       let impls = Set.add_seq (List.to_seq impls') impls in
       (intfs, impls)
@@ -70,15 +72,10 @@ let run cfg recurse root no_stdlib ocamlfind_roots =
       List.map fn elements
   in
   List.iter (fun elt -> Fmt.pr "%a\n%!" Elt.pp elt) results;
-  Ok ()
-
-let run () _quiet cfg recursive root no_stdlib ocamlfind_roots =
-  match run cfg recursive root no_stdlib ocamlfind_roots with
-  | Ok () -> `Ok ()
-  | Error (`Msg msg) -> `Error (false, msg)
+  Ok 0
 
 open Cmdliner
-open Args
+open Unic_cli
 
 let path =
   let doc = "The OCaml project directory." in
@@ -110,21 +107,16 @@ let prefer =
 
 let term =
   let open Term in
-  let term =
-    const run
-    $ setup_fmt
-    $ setup_logs
-    $ Uniq_cfg.setup
-    $ recurse
-    $ path
-    $ no_stdlib
-    $ Uniq_meta.setup
-  in
-  ret term
+  const run
+  $ setup_logs
+  $ setup_ocaml
+  $ recurse
+  $ path
+  $ no_stdlib
+  $ setup_ocamlfind
+  |> term_result
 
 let cmd =
   let doc = "Print information about an OCaml file." in
   let man = [ `S Manpage.s_description; `P "$(tname)" ] in
-  Cmd.v (Cmd.info "info" ~doc ~man) term
-
-let () = Cmd.(exit @@ eval cmd)
+  Cmd.v (Cmd.info "resolve" ~doc ~man) term

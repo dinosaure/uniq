@@ -35,7 +35,7 @@ let run path (mpath : Uniq_info.Path.t option) =
           end
       end
 
-let run () quiet path modname =
+let run quiet path modname =
   match run path modname with
   | Ok digest when not quiet ->
       Fmt.pr "%a\n%!" Uniq_digest.pp digest;
@@ -45,7 +45,7 @@ let run () quiet path modname =
   | Error _ -> `Ok 1
 
 open Cmdliner
-open Args
+open Unic_cli
 
 let artifact =
   let doc = "The OCaml object." in
@@ -81,11 +81,9 @@ let path : Uniq_info.Path.t option Term.t =
 
 let term =
   let open Term in
-  ret (const run $ setup_fmt $ setup_logs $ artifact $ path)
+  ret (const run $ setup_logs $ artifact $ path)
 
 let cmd =
   let doc = "Try to extract the $(i,digest) from an OCaml object." in
   let man = [ `S Manpage.s_description; `P "$(tname)" ] in
   Cmd.v (Cmd.info "digest" ~doc ~man) term
-
-let () = Cmd.(exit @@ eval' cmd)

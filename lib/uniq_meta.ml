@@ -779,8 +779,12 @@ let from_cmi_to_impl ~roots ~packages:candidates ?stdlib
           | [] -> Some (List.hd pkgs)
           | [ pkg ] -> Some pkg
           | _ :: _ as several -> (
-              let chosen = ambiguity modname (List.map (fun p -> p.pkg) several) in
-              match List.find_opt (fun p -> Path.equal p.pkg chosen) several with
+              let chosen =
+                ambiguity modname (List.map (fun p -> p.pkg) several)
+              in
+              match
+                List.find_opt (fun p -> Path.equal p.pkg chosen) several
+              with
               | Some pkg -> Some pkg
               | None -> Some (List.hd several)))
     in
@@ -807,7 +811,9 @@ let from_cmi_to_impl ~roots ~packages:candidates ?stdlib
           (* Unique in this directory, but a sibling subpackage may implement
              the same interface ([digestif.c] vs [digestif.ocaml]); when one
              does, the choice is genuinely ambiguous. *)
-          match siblings pkg.pkg with [] -> Some pkg | sibs -> choose (pkg :: sibs))
+          match siblings pkg.pkg with
+          | [] -> Some pkg
+          | sibs -> choose (pkg :: sibs))
       | _ :: _ :: _ as several -> choose several
       (* No directory match (e.g. the [*.cmi] was relocated): scan by [crc]. *)
       | [] -> choose (List.filter owns candidates)

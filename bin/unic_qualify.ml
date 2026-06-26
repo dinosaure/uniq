@@ -45,7 +45,7 @@ let only location =
   let fn location' = Ok (Fpath.equal location location') in
   `Sat fn
 
-let run cfg recurse root no_stdlib =
+let run _quiet cfg recurse root no_stdlib =
   let ( let* ) = Result.bind in
   let sources = Uniq_resolve.Src.sources ~recurse root in
   let srcs =
@@ -65,8 +65,13 @@ let run cfg recurse root no_stdlib =
     List.fold_left
       (fun (intfs, impls) t ->
         let intfs', impls' = Uniq_info.missing t in
-        ( Set.add_seq (List.to_seq intfs') intfs
-        , Set.add_seq (List.to_seq impls') impls ))
+        let intfs' = List.map fst intfs' in
+        let intfs' = List.to_seq intfs' in
+        let impls' = List.map fst impls' in
+        let impls' = List.to_seq impls' in
+        let intfs = Set.add_seq intfs' intfs in
+        let impls = Set.add_seq impls' impls in
+        (intfs, impls))
       Set.(empty, empty)
       ts
   in
@@ -77,15 +82,10 @@ let run cfg recurse root no_stdlib =
   List.iter (fun m -> Fmt.pr "\t%a\n%!" Fmt.(styled `Yellow Modname.pp) m) intfs;
   if impls <> [] then Fmt.pr "Missing implementations:\n%!";
   List.iter (fun m -> Fmt.pr "\t%a\n%!" Fmt.(styled `Yellow Modname.pp) m) impls;
-  Ok ()
-
-let run () _quiet cfg recursive root no_stdlib =
-  match run cfg recursive root no_stdlib with
-  | Ok () -> `Ok ()
-  | Error (`Msg msg) -> `Error (false, msg)
+  Ok 0
 
 open Cmdliner
-open Args
+open Unic_cli
 
 let path =
   let doc = "The OCaml project directory." in
@@ -103,26 +103,21 @@ let recurse =
   let doc = "Include sub-directories." in
   Arg.(value & flag & info [ "r"; "recurse" ] ~doc)
 
-let no_stdlib =
+let without_stdlib =
   let doc = "Do not add the standard library to the list of include sources." in
-  Arg.(value & flag & info [ "no-stdlib" ] ~doc)
+  Arg.(value & flag & info [ "without-stdlib" ] ~doc)
 
 let term =
   let open Term in
-  let term =
-    const run
-    $ setup_fmt
-    $ setup_logs
-    $ Uniq_cfg.setup
-    $ recurse
-    $ path
-    $ no_stdlib
-  in
-  ret term
+  const run
+  $ setup_logs
+  $ setup_ocaml
+  $ recurse
+  $ path
+  $ without_stdlib
+  |> term_result
 
 let cmd =
   let doc = "Print information about an OCaml file." in
   let man = [ `S Manpage.s_description; `P "$(tname)" ] in
-  Cmd.v (Cmd.info "info" ~doc ~man) term
-
-let () = Cmd.(exit @@ eval cmd)
+  Cmd.v (Cmd.info "qualify" ~doc ~man) term

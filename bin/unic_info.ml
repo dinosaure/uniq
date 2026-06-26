@@ -12,11 +12,10 @@ let search quiet filters prefer_library roots modname digest =
   match Uniq_mod.search ~filters ~roots modname digest with
   | Ok [] -> `Ok 1
   | Ok modules ->
+      let fn (_, m) = Uniq_info.is_a_library m in
       let modules =
         if prefer_library then
-          match
-            List.filter (fun (_, m) -> Uniq_info.is_a_library m) modules
-          with
+          match List.filter fn modules with
           | [] -> modules
           | libraries -> libraries
         else modules
@@ -62,7 +61,7 @@ let directories =
   & opt_all (conv (parser, Fpath.pp)) []
   & info [ "I" ] ~doc ~docv:"DIRECTORY"
 
-let path =
+let modpath =
   let doc = "The module name." in
   let parser str =
     let p = String.split_on_char '.' str in
@@ -150,8 +149,8 @@ let term_search =
       $ setup_logs
       $ setup_filters
       $ prefer_library
-      $ directories
-      $ path
+      $ setup_ocamlfind
+      $ modpath
       $ digest
     end
 

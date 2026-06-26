@@ -4,9 +4,10 @@ module Solver = Uniq_solver
 module Clos = Uniq_clos
 module Vendor = Uniq_vendor
 
-let prompt modname pkgs =
+let rec prompt modname pkgs =
+  let pkgs = List.sort Meta.Path.compare pkgs in
   let pp_pkg_with_idx ppf (idx, pkg) =
-    Fmt.pf ppf "  [%d] %a" idx Uniq_meta.Path.pp pkg
+    Fmt.pf ppf "  [%d] %a" idx Meta.Path.pp pkg
   in
   let pkgs_with_idx = List.mapi (fun idx pkg -> (idx, pkg)) pkgs in
   Fmt.pr "@[<v>Module %a is provided by several ocamlfind packages:@,%a@]@."
@@ -14,13 +15,9 @@ let prompt modname pkgs =
     Fmt.(list ~sep:cut pp_pkg_with_idx)
     pkgs_with_idx;
   Fmt.pr "Pick one [0-%d]: %!" (List.length pkgs - 1);
-  match input_line stdin with
-  | exception End_of_file -> assert false
-  | line ->
-      begin match int_of_string_opt line with
-      | Some idx when idx >= 0 && idx < List.length pkgs -> List.nth pkgs idx
-      | _ -> assert false
-      end
+  match int_of_string_opt (input_line stdin) with
+  | Some idx when idx >= 0 && idx < List.length pkgs -> List.nth pkgs idx
+  | Some _ | None -> prompt modname pkgs
 
 let their_are_copies = function
   | [] -> true
@@ -48,16 +45,6 @@ let prefer_stdlib ?stdlib solutions =
       in
       List.find_opt in_stdlib solutions
       |> Stdlib.Option.value ~default:(List.hd solutions)
-
-module Archive = struct
-  type t = Meta.archive
-
-  let compare = Stdlib.compare
-end
-
-module ASet = Set.Make (Archive)
-module SSet = Set.Make (String)
-module MSet = Set.Make (Modname)
 
 let run _quiet cfg0 roots cfg1 dirs =
   let ( let* ) = Result.bind in
@@ -97,13 +84,13 @@ let run _quiet cfg0 roots cfg1 dirs =
   in
   let* infos, _private_modules = Solver.solve_intfs ~cfg:cfg1 ~providers dirs in
   let ambiguity =
-    let table = Hashtbl.create 0x10 in
+    let memo = Hashtbl.create 0x7ff in
     fun modname paths ->
-      match Hashtbl.find_opt table (Modname.to_string modname) with
+      match Hashtbl.find_opt memo modname with
       | Some pkg -> pkg
       | None ->
           let pkg = prompt modname paths in
-          Hashtbl.replace table (Modname.to_string modname) pkg;
+          Hashtbl.replace memo modname pkg;
           pkg
   in
   let* intf_holes, impl_holes = Clos.verify ~env ~ambiguity infos in

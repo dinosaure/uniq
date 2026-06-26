@@ -1,11 +1,11 @@
 let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 
-let show () quiet meta =
+let show quiet meta =
   match Uniq_meta.parser meta with
   | Ok ts ->
       if not quiet then
         Fmt.pr "%a@\n%!" Fmt.(list ~sep:(any "@\n") Uniq_meta.pp) ts;
-      Ok ()
+      Ok 0
   | Error _ as err -> err
 
 let pp_descr ppf t =
@@ -20,7 +20,7 @@ let pp_descr ppf t =
   in
   List.iter print t
 
-let search () _quiet predicates roots path =
+let search _quiet predicates roots path =
   match Uniq_meta.search ~roots ~predicates path with
   | Ok descrs ->
       List.iter
@@ -28,10 +28,10 @@ let search () _quiet predicates roots path =
           Fmt.pr "%a:\n%!" Fmt.(styled `Green Fpath.pp) path;
           Fmt.pr "%a\n%!" pp_descr descr)
         descrs;
-      Ok ()
+      Ok 0
   | Error _ as err -> err
 
-let ancestors () _quiet predicates roots path =
+let ancestors _quiet predicates roots path =
   match Uniq_meta.ancestors ~roots ~predicates path with
   | Ok descrs ->
       List.iter
@@ -40,11 +40,11 @@ let ancestors () _quiet predicates roots path =
           Fmt.pr "%a:\n%!" Fmt.(styled `Yellow Uniq_meta.Path.pp) meta;
           Fmt.pr "%a\n%!" pp_descr descr)
         descrs;
-      Ok ()
+      Ok 0
   | Error _ as err -> err
 
 open Cmdliner
-open Args
+open Unic_cli
 
 let path =
   let doc = "The META file." in
@@ -72,27 +72,17 @@ let predicates =
 
 let term_show =
   let open Term in
-  term_result ~usage:false (const show $ setup_fmt $ setup_logs $ path)
+  term_result ~usage:false (const show $ setup_logs $ path)
 
 let term_search =
   let open Term in
   term_result ~usage:false
-    (const search
-    $ setup_fmt
-    $ setup_logs
-    $ predicates
-    $ Uniq_meta.setup
-    $ meta_path)
+    (const search $ setup_logs $ predicates $ setup_ocamlfind $ meta_path)
 
 let term_ancestors =
   let open Term in
   term_result ~usage:false
-    (const ancestors
-    $ setup_fmt
-    $ setup_logs
-    $ predicates
-    $ Uniq_meta.setup
-    $ meta_path)
+    (const ancestors $ setup_logs $ predicates $ setup_ocamlfind $ meta_path)
 
 let cmd_show =
   let doc = "Parse & print META file." in
@@ -111,13 +101,10 @@ let cmd_ancestors =
   let man = [] in
   Cmd.v (Cmd.info "ancestors" ~doc ~man) term_ancestors
 
-let () =
+let cmd =
   let doc = "A tool to manipulate META files." in
   let man = [ `S Manpage.s_description; `P "$(tname)" ] in
   let default = Term.(ret (const (`Help (`Pager, None)))) in
-  let cmd =
-    Cmd.group ~default
-      (Cmd.info "meta" ~doc ~man)
-      [ cmd_show; cmd_search; cmd_ancestors ]
-  in
-  Cmd.(exit @@ eval cmd)
+  Cmd.group ~default
+    (Cmd.info "meta" ~doc ~man)
+    [ cmd_show; cmd_search; cmd_ancestors ]

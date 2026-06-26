@@ -69,13 +69,15 @@ let search ?(filters = (`All, `All, `All)) ~roots p digest =
   let elements path =
     if Sys.is_directory (Fpath.to_string path) then Ok false
     else if is_ocaml_object filters path then
-      let unitname = Unitname.modulize (Fpath.to_string path) in
-      let lst = Uniq_info.Path.to_list p in
-      match (unitname, lst) with
-      | unitname, [ modname ] when is_source_file path ->
-          Ok (Modname.compare modname (Unitname.modname unitname) = 0)
-      | _ -> Ok (is_source_file path = false)
-      | exception _ -> Ok false
+      try
+        let unitname = Unitname.modulize (Fpath.to_string path) in
+        let lst = Uniq_info.Path.to_list p in
+        match (unitname, lst) with
+        | unitname, [ modname ] when is_source_file path ->
+            Ok (Modname.compare modname (Unitname.modname unitname) = 0)
+        | _ -> Ok (is_source_file path = false)
+        | exception _ -> Ok false
+      with _ -> Ok false
     else Ok false
   in
   let traverse _ = Ok true in

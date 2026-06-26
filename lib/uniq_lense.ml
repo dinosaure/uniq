@@ -20,4 +20,4 @@ let v name =
   match is_a_fpath name >>= is_a_directory >>= collect,
         is_a_package_name name >>= find_META_file >>= resolve_META_file,
         is_an_opam_package_name name >>= find_directories with
-
+*)
