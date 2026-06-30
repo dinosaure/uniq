@@ -50,6 +50,7 @@
   uniq.clos
   uniq.policy
   uniq.vendor
+  uniq.papam
   unic.cli))
 
 (library

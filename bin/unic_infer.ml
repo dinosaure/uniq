@@ -3,6 +3,7 @@ module Info = Uniq_info
 module Solver = Uniq_solver
 module Clos = Uniq_clos
 module Vendor = Uniq_vendor
+module Opam = Uniq_opam
 module Option = Stdlib.Option
 
 let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
@@ -139,7 +140,28 @@ let run _quiet cfg0 roots cfg1 policy dirs =
         Clos.impls ~env ~disambiguate:disambiguate_on_packages infos
       in
       let infos = Vendor.color impls in
-      Fmt.pr "@[<hov>%a@]\n%!" Fmt.(list ~sep:(any ";@ ") Info.pp) infos;
+      (* NOTE(dinosaure): final pass. The artifacts above are [*.cmxa]
+         archives; map them back to the OPAM packages that own them (the ones
+         with C stubs and the ones that transitively require them) so the user
+         gets package names rather than archive paths.
+
+         We also collect the [-L<dir>] C-link search paths of these archives:
+         some dependencies (e.g. [gmp] behind [zarith]) are only reachable
+         through the C linker, never through an OCaml module import, so the
+         module closure alone misses them. These directories are fragile and
+         may be system paths; passing them through [opam_packages_of_meta_dirs]
+         is what keeps only the ones actually owned by an installed package. *)
+      let dirs =
+        let fn info = Fpath.parent (Info.location info) in
+        let cmxa_dirs = List.map fn infos in
+        let cc_dirs = List.concat_map Info.c_library_dirs infos in
+        List.rev_append cc_dirs cmxa_dirs |> List.sort_uniq Fpath.compare
+      in
+      let* pkgs =
+        Opam.with_switch_state @@ fun sw ->
+        Opam.package_names_of_meta_dirs ~sw dirs
+      in
+      Fmt.pr "@[<v>%a@]\n%!" Fmt.(list ~sep:cut string) pkgs;
       Ok ()
   | _ ->
       let pp_hole ppf (m, info) =

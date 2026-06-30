@@ -169,6 +169,30 @@ let has_c_stubs t =
   | Format (Cma, toc) -> toc.Cmo_format.lib_ccobjs <> []
   | _ -> false
 
+(* NOTE(dinosaure): collect [-L] paths. *)
+let c_library_dirs t =
+  let ccflags =
+    match t.format with
+    | Format (Cmxa, li) -> li.Cmx_format.lib_ccobjs @ li.Cmx_format.lib_ccopts
+    | Format (Cma, toc) -> toc.Cmo_format.lib_ccobjs @ toc.Cmo_format.lib_ccopts
+    | _ -> []
+  in
+  let rec collect acc = function
+    | [] -> acc
+    | tok :: rest when String.length tok > 2 && String.sub tok 0 2 = "-L" ->
+        collect (String.sub tok 2 (String.length tok - 2) :: acc) rest
+    | "-L" :: dir :: rest -> collect (dir :: acc) rest
+    | _ :: rest -> collect acc rest
+  in
+  let tokens =
+    List.concat_map (String.split_on_char ' ') ccflags
+    |> List.concat_map (String.split_on_char '\t')
+    |> List.filter (fun s -> s <> "")
+  in
+  collect [] tokens
+  |> List.filter_map (fun s -> Result.to_option (Fpath.of_string s))
+  |> List.sort_uniq Fpath.compare
+
 let is_native t =
   match t.format with
   | Format (Cmx, _) -> true

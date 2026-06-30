@@ -75,3 +75,8 @@ let opam_packages_of_meta_dirs ~sw meta_dirs =
       in
       if matches then OpamPackage.Name.Set.add name acc else acc)
     sw.OpamStateTypes.installed OpamPackage.Name.Set.empty
+
+let package_names_of_meta_dirs ~sw meta_dirs =
+  opam_packages_of_meta_dirs ~sw meta_dirs
+  |> OpamPackage.Name.Set.elements
+  |> List.map OpamPackage.Name.to_string

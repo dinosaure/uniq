@@ -45,6 +45,7 @@ val vs : Fpath.t list -> (t list, [> `Msg of string ]) result
 val is_fully_resolved : t -> bool
 val is_a_library : t -> bool
 val has_c_stubs : t -> bool
+val c_library_dirs : t -> Fpath.t list
 val is_native : t -> bool
 val is_an_interface : t -> bool
 val is_a_cmi : t -> bool
